@@ -1,15 +1,144 @@
 # 都立AI拡張・完全コード
 
-各ブロックを見出しの相対パスに保存してください。ビルド生成物とnode_modulesは起動手順で生成します。
+各コードブロックを見出しの相対パスに保存してください。秘密情報は含みません。
 
-## package.json
+## 1. ディレクトリ構成
+
+```text
+
+toritsu-ai-vscode/
+
+  package.json
+
+  tsconfig.json
+
+  src/commands/editSelection.ts
+
+  src/commands/explainCode.ts
+
+  src/commands/openChat.ts
+
+  src/commands/setApiKey.ts
+
+  src/extension.ts
+
+  src/providers/chatHtml.ts
+
+  src/providers/chatViewProvider.ts
+
+  src/services/apiProtocol.ts
+
+  src/services/approvalService.ts
+
+  src/services/authService.ts
+
+  src/services/authenticatedClient.ts
+
+  src/services/browserHandoff.ts
+
+  src/services/chatHistory.ts
+
+  src/services/connectionSetup.ts
+
+  src/services/contextCollector.ts
+
+  src/services/fileAttachments.ts
+
+  src/services/imageAttachments.ts
+
+  src/services/linkReader.ts
+
+  src/services/llmClient.ts
+
+  src/services/modelCatalog.ts
+
+  src/services/modelSelection.ts
+
+  src/services/pdfParser.ts
+
+  src/services/pdfWorker.ts
+
+  src/services/promptBuilder.ts
+
+  src/services/toritsuAiClient.ts
+
+  src/types/ai.ts
+
+  src/utils/extractCode.ts
+
+  src/utils/runRequest.ts
+
+  src/utils/sanitizeResponse.ts
+
+  .gitignore
+
+  .vscodeignore
+
+  .vscode/launch.json
+
+  .vscode/tasks.json
+
+  media/chat.css
+
+  media/chat.js
+
+  media/icon.svg
+
+  media/toolbar-dark.svg
+
+  media/toolbar-light.svg
+
+  test/approval.test.cjs
+
+  test/auth.test.cjs
+
+  test/browserHandoff.test.cjs
+
+  test/client.test.cjs
+
+  test/connectionSetup.test.cjs
+
+  test/edit.test.cjs
+
+  test/fileAttachments.test.cjs
+
+  test/history.test.cjs
+
+  test/images.test.cjs
+
+  test/linkFlow.test.cjs
+
+  test/links.test.cjs
+
+  test/modelCatalog.test.cjs
+
+  test/models.test.cjs
+
+  test/pdfParser.test.cjs
+
+  test/protocol.test.cjs
+
+  test/timeouts.test.cjs
+
+  test/vscode.smoke.cjs
+
+  package-lock.json
+
+  README.md
+
+```
+
+## 2. package.json
+
+### package.json
 
 ````json
+
 {
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -197,13 +326,28 @@
     "cheerio": "^1.0.0",
     "ipaddr.js": "^2.2.0",
     "pdfjs-dist": "^4.10.38"
-  }
+  },
+  "activationEvents": [
+    "onView:toritsuAI.chat",
+    "onCommand:toritsuAI.setApiKey",
+    "onCommand:toritsuAI.explainCode",
+    "onCommand:toritsuAI.editSelection",
+    "onCommand:toritsuAI.openChat",
+    "onCommand:toritsuAI.signIn",
+    "onCommand:toritsuAI.signOut",
+    "onCommand:toritsuAI.showHistory",
+    "onCommand:toritsuAI.setupConnection"
+  ]
 }
+
 ````
 
-## tsconfig.json
+## 3. tsconfig.json
+
+### tsconfig.json
 
 ````json
+
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -221,68 +365,15 @@
   },
   "include": ["src/**/*.ts"]
 }
+
 ````
 
-## .gitignore
+## 4. 各TypeScriptファイル全文
 
-````text
-node_modules/
-dist/
-*.vsix
-*.log
-````
-
-## .vscodeignore
-
-````text
-.vscode/**
-src/**
-test/**
-tsconfig.json
-CODE.md
-dist/**/*.map
-*.vsix
-node_modules/pdfjs-dist/**/*.map
-node_modules/pdfjs-dist/build/**
-node_modules/pdfjs-dist/web/**
-node_modules/pdfjs-dist/legacy/web/**
-node_modules/pdfjs-dist/types/**
-````
-
-## .vscode/launch.json
-
-````json
-{
-  "version": "0.2.0",
-  "configurations": [{
-    "name": "Run Toritsu AI",
-    "type": "extensionHost",
-    "request": "launch",
-    "noDebug": true,
-    "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
-    "outFiles": ["${workspaceFolder}/dist/**/*.js"],
-    "preLaunchTask": "npm: compile"
-  }]
-}
-````
-
-## .vscode/tasks.json
-
-````json
-{
-  "version": "2.0.0",
-  "tasks": [{
-    "type": "npm",
-    "script": "compile",
-    "group": "build",
-    "problemMatcher": ["$tsc"]
-  }]
-}
-````
-
-## src/commands/editSelection.ts
+### src/commands/editSelection.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { LlmClient } from '../services/llmClient';
 import { collectContext, requireEditor } from '../services/contextCollector';
@@ -321,11 +412,13 @@ export async function editSelection(
   });
   if (!applied) throw new Error('編集を適用できませんでした。ファイルの状態を確認して再実行してください。');
 }
+
 ````
 
-## src/commands/explainCode.ts
+### src/commands/explainCode.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { LlmClient } from '../services/llmClient';
 import { collectContext, requireEditor } from '../services/contextCollector';
@@ -339,22 +432,26 @@ export async function explainCode(client: LlmClient): Promise<void> {
   const document = await vscode.workspace.openTextDocument({ language: 'markdown', content });
   await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, preview: true });
 }
+
 ````
 
-## src/commands/openChat.ts
+### src/commands/openChat.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 
 export async function openChat(): Promise<void> {
   await vscode.commands.executeCommand('workbench.view.extension.toritsuAI-secondary');
   await vscode.commands.executeCommand('toritsuAI.chat.focus');
 }
+
 ````
 
-## src/commands/setApiKey.ts
+### src/commands/setApiKey.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { API_KEY_SECRET } from '../services/toritsuAiClient';
 
@@ -368,11 +465,13 @@ export async function setApiKey(secrets: vscode.SecretStorage, token?: vscode.Ca
   await secrets.store(API_KEY_SECRET, value.trim());
   void vscode.window.showInformationMessage('都立AIのAPIキーを保存しました。');
 }
+
 ````
 
-## src/extension.ts
+### src/extension.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
 import { ConnectionSetup } from './services/connectionSetup';
@@ -454,11 +553,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }));
   }
 }
+
 ````
 
-## src/providers/chatHtml.ts
+### src/providers/chatHtml.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 
@@ -535,11 +636,13 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <dialog id="sketch-dialog" aria-labelledby="sketch-title"><h2 id="sketch-title">スケッチ</h2><p class="muted">図や画面のイメージを描いてください。</p><canvas id="sketch-canvas" width="1000" height="620" aria-label="スケッチの描画領域"></canvas><div class="sketch-actions"><button id="sketch-clear" class="text-button" type="button">描き直す</button><button id="sketch-close" class="text-button" type="button">キャンセル</button><button id="sketch-add" class="primary" type="button" disabled>画像として添付</button></div></dialog>
 <script nonce="${nonce}" src="${script}"></script></body></html>`;
 }
+
 ````
 
-## src/providers/chatViewProvider.ts
+### src/providers/chatViewProvider.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { BrowserHandoff, browserPrompt } from '../services/browserHandoff';
 import { LlmClient } from '../services/llmClient';
@@ -841,11 +944,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     [...this.subscriptions, ...this.viewSubscriptions].forEach(item => item.dispose());
   }
 }
+
 ````
 
-## src/services/approvalService.ts
+### src/services/apiProtocol.ts
 
 ````typescript
+
+import { ClientConfig, Message } from '../types/ai';
+
+/** Wire format and authentication can change independently of commands and transport. */
+export interface ApiProtocol {
+  headers(config: ClientConfig, apiKey: string): Headers;
+  request(config: ClientConfig, messages: readonly Message[]): unknown;
+  response(body: unknown): string;
+}
+
+// TODO: 正式な都立AIの認証・request/response仕様の公開後に専用実装へ差し替える。
+export class OpenAiCompatibleProtocol implements ApiProtocol {
+  headers(config: ClientConfig, apiKey: string): Headers {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    headers.set(config.authHeader, [config.apiKeyPrefix.trim(), apiKey].filter(Boolean).join(' '));
+    return headers;
+  }
+
+  request(config: ClientConfig, messages: readonly Message[]): unknown {
+    return { model: config.model, messages, temperature: 0.2 };
+  }
+
+  response(body: unknown): string {
+    const content = (body as { choices?: { message?: { content?: unknown } }[] } | null)
+      ?.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error('API応答に空でない choices[0].message.content がありません。');
+    }
+    return content;
+  }
+}
+
+````
+
+### src/services/approvalService.ts
+
+````typescript
+
 import * as vscode from 'vscode';
 import { LlmClient } from './llmClient';
 import { Message } from '../types/ai';
@@ -919,11 +1061,13 @@ export class ApprovedClient implements LlmClient {
     return this.client.complete(messages, signal);
   }
 }
+
 ````
 
-## src/services/authService.ts
+### src/services/authService.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { createHash, randomUUID } from 'node:crypto';
 import { API_KEY_SECRET } from './toritsuAiClient';
@@ -1000,11 +1144,13 @@ export class AuthService implements Authentication, vscode.Disposable {
 
   dispose(): void { this.keyPrompt?.cancel(); this.keyPrompt?.dispose(); for (const subscription of this.subscriptions) subscription.dispose(); this.changed.dispose(); }
 }
+
 ````
 
-## src/services/authenticatedClient.ts
+### src/services/authenticatedClient.ts
 
 ````typescript
+
 import { Authentication } from './authService';
 import { LlmClient } from './llmClient';
 import { Message } from '../types/ai';
@@ -1035,11 +1181,13 @@ export class AuthenticatedClient implements LlmClient {
     }
   }
 }
+
 ````
 
-## src/services/browserHandoff.ts
+### src/services/browserHandoff.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { FileContext, ImageAttachment, Message } from '../types/ai';
 import { ChatOptions } from './promptBuilder';
@@ -1086,11 +1234,13 @@ export class BrowserHandoff {
     return true;
   }
 }
+
 ````
 
-## src/services/chatHistory.ts
+### src/services/chatHistory.ts
 
 ````typescript
+
 import { createHash, randomUUID } from 'node:crypto';
 import type { Memento } from 'vscode';
 import { Message } from '../types/ai';
@@ -1183,11 +1333,13 @@ export class ChatHistory {
     if (this.activeId === id) this.activeId = undefined;
   }
 }
+
 ````
 
-## src/services/connectionSetup.ts
+### src/services/connectionSetup.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { API_KEY_SECRET } from './toritsuAiClient';
 
@@ -1244,11 +1396,13 @@ export class ConnectionSetup {
     } finally { this.active = false; signal?.removeEventListener('abort', cancel); cancellation.dispose(); }
   }
 }
+
 ````
 
-## src/services/contextCollector.ts
+### src/services/contextCollector.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 import { FileContext } from '../types/ai';
 
@@ -1267,11 +1421,13 @@ export function requireEditor(): vscode.TextEditor {
   if (!editor) throw new Error('対象のファイルをエディターで開いてください。');
   return editor;
 }
+
 ````
 
-## src/services/fileAttachments.ts
+### src/services/fileAttachments.ts
 
 ````typescript
+
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -1333,11 +1489,13 @@ export async function collectAttachments(paths: readonly string[], signal?: Abor
   check();
   return { files, skipped: skipped + Math.max(0, paths.length - MAX_FILES) };
 }
+
 ````
 
-## src/services/imageAttachments.ts
+### src/services/imageAttachments.ts
 
 ````typescript
+
 import { ImageAttachment } from '../types/ai';
 
 export const MAX_IMAGES = 4;
@@ -1369,11 +1527,13 @@ export function validateImages(raw: unknown): ImageAttachment[] {
     return { name: name.slice(0, 200), dataUrl };
   });
 }
+
 ````
 
-## src/services/linkReader.ts
+### src/services/linkReader.ts
 
 ````typescript
+
 import { lookup } from 'node:dns/promises';
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -1511,147 +1671,26 @@ export class LinkReader {
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
 }
+
 ````
 
-## src/services/pdfParser.ts
+### src/services/llmClient.ts
 
 ````typescript
-import { fork } from 'node:child_process';
-import { join } from 'node:path';
 
-export interface PdfText { text: string; truncated: boolean }
-export const PDF_TIMEOUT_MS = 15000;
-export const PDF_HEAP_MB = 256;
-
-/** Keep parser work off the extension host; the parent owns cancellation and the deadline. */
-export function parsePdf(bytes: Buffer, signal?: AbortSignal): Promise<PdfText> {
-  if (signal?.aborted) return Promise.reject(new Error('PDFの読み込みをキャンセルしました。'));
-  if (bytes.length > 10 * 1024 * 1024) return Promise.reject(new Error('読み込めるファイルは10MBまでです。'));
-  return new Promise((resolve, reject) => {
-    // Do not inherit API keys, NODE_OPTIONS, or extension-host debug flags.
-    // ELECTRON_RUN_AS_NODE also supports desktop VS Code's Electron executable.
-    const child = fork(join(__dirname, 'pdfWorker.js'), [], {
-      execArgv: [`--max-old-space-size=${PDF_HEAP_MB}`],
-      env: { ELECTRON_RUN_AS_NODE: '1', ...(process.platform === 'win32' && process.env.SystemRoot
-        ? { SystemRoot: process.env.SystemRoot } : {}) },
-      cwd: __dirname, serialization: 'advanced',
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc']
-    });
-    let settled = false;
-    const finish = (error?: Error, result?: PdfText) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', cancel);
-      // Kill even after a successful reply: parser cleanup must never delay completion.
-      child.kill('SIGKILL');
-      if (error) reject(error);
-      else resolve(result!);
-    };
-    const cancel = () => finish(new Error('PDFの読み込みをキャンセルしました。'));
-    const timer = setTimeout(() => finish(new Error('PDFの解析が15秒を超えたため中止しました。')), PDF_TIMEOUT_MS);
-    child.on('error', () => finish(new Error('PDF解析プロセスを起動・通信できませんでした。')));
-    child.on('exit', () => finish(new Error('PDFの解析を完了できませんでした。形式またはメモリ使用量を確認してください。')));
-    child.on('message', (message: unknown) => {
-      if (!message || typeof message !== 'object') {
-        finish(new Error('PDF解析の応答が不正です。')); return;
-      }
-      const result = message as Record<string, unknown>;
-      if (result.error === 'noText') {
-        finish(new Error('PDFに抽出可能な文字がありません。スキャン画像のOCRには対応していません。'));
-      } else if (typeof result.text === 'string' && result.text.length <= 40000 && typeof result.truncated === 'boolean') {
-        finish(undefined, { text: result.text, truncated: result.truncated });
-      } else {
-        finish(new Error('PDFを解析できませんでした。パスワード保護やファイル形式を確認してください。'));
-      }
-    });
-    signal?.addEventListener('abort', cancel, { once: true });
-    if (signal?.aborted) { cancel(); return; }
-    child.send(bytes, error => {
-      if (error) finish(new Error('PDF解析プロセスへデータを送信できませんでした。'));
-    });
-  });
-}
-````
-
-## src/services/pdfWorker.ts
-
-````typescript
-import { dirname, join, sep } from 'node:path';
-
-const MAX_CHARS = 40000;
-
-// One input per process. No URL or credential is passed to the parser.
-process.once('message', (input: unknown) => { void run(input); });
-process.once('disconnect', () => process.exit(0));
-
-async function run(input: unknown): Promise<void> {
-  try {
-    if (!(input instanceof Uint8Array) || input.byteLength > 10 * 1024 * 1024) throw new Error('Invalid input');
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const assets = dirname(require.resolve('pdfjs-dist/package.json'));
-    const task = pdfjs.getDocument({
-      data: new Uint8Array(input), isEvalSupported: false, useSystemFonts: false, verbosity: 0,
-      cMapUrl: join(assets, 'cmaps') + sep, cMapPacked: true,
-      standardFontDataUrl: join(assets, 'standard_fonts') + sep
-    });
-    const document = await task.promise;
-    let text = '';
-    let truncated = document.numPages > 100;
-    let hasText = false;
-    for (let index = 1; index <= Math.min(document.numPages, 100); index++) {
-      const page = await document.getPage(index);
-      // Stream items so a page's entire text content is not retained at once.
-      const reader = page.streamTextContent().getReader();
-      text += `\n[PDF ${index}ページ]\n`;
-      let reachedLimit = text.length >= MAX_CHARS;
-      try {
-        while (!reachedLimit) {
-          const chunk = await reader.read();
-          if (chunk.done) break;
-          for (const item of chunk.value.items) {
-            if (!('str' in item)) continue;
-            hasText ||= Boolean(item.str.trim());
-            const value = item.str + (item.hasEOL ? '\n' : ' ');
-            const remaining = MAX_CHARS - text.length;
-            text += value.slice(0, remaining);
-            if (value.length >= remaining) { reachedLimit = true; break; }
-          }
-        }
-      } finally {
-        if (reachedLimit) await reader.cancel();
-        reader.releaseLock();
-        page.cleanup();
-      }
-      if (reachedLimit) { truncated = true; break; }
-    }
-    if (!hasText) reply({ error: 'noText' });
-    else reply({ text: text.slice(0, MAX_CHARS), truncated });
-  } catch {
-    reply({ error: 'invalidPdf' });
-  }
-}
-
-function reply(message: object): void {
-  if (!process.connected || !process.send) { process.exit(0); return; }
-  process.send(message, () => process.exit(0));
-}
-````
-
-## src/services/llmClient.ts
-
-````typescript
 import { Message } from '../types/ai';
 
 // VS Codeに依存しないため、inline completionなどからも利用可能。
 export interface LlmClient {
   complete(messages: readonly Message[], signal?: AbortSignal): Promise<string>;
 }
+
 ````
 
-## src/services/modelCatalog.ts
+### src/services/modelCatalog.ts
 
 ````typescript
+
 export interface ModelCatalogConfig {
   baseUrl: string;
   modelsEndpoint: string;
@@ -1725,11 +1764,13 @@ export class ApiModelCatalog implements ModelCatalog {
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
 }
+
 ````
 
-## src/services/modelSelection.ts
+### src/services/modelSelection.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 
 const presets = [
@@ -1794,11 +1835,142 @@ export class ModelSelection {
     await config.update('model', model, vscode.ConfigurationTarget.Global);
   }
 }
+
 ````
 
-## src/services/promptBuilder.ts
+### src/services/pdfParser.ts
 
 ````typescript
+
+import { fork } from 'node:child_process';
+import { join } from 'node:path';
+
+export interface PdfText { text: string; truncated: boolean }
+export const PDF_TIMEOUT_MS = 15000;
+export const PDF_HEAP_MB = 256;
+
+/** Keep parser work off the extension host; the parent owns cancellation and the deadline. */
+export function parsePdf(bytes: Buffer, signal?: AbortSignal): Promise<PdfText> {
+  if (signal?.aborted) return Promise.reject(new Error('PDFの読み込みをキャンセルしました。'));
+  if (bytes.length > 10 * 1024 * 1024) return Promise.reject(new Error('読み込めるファイルは10MBまでです。'));
+  return new Promise((resolve, reject) => {
+    // Do not inherit API keys, NODE_OPTIONS, or extension-host debug flags.
+    // ELECTRON_RUN_AS_NODE also supports desktop VS Code's Electron executable.
+    const child = fork(join(__dirname, 'pdfWorker.js'), [], {
+      execArgv: [`--max-old-space-size=${PDF_HEAP_MB}`],
+      env: { ELECTRON_RUN_AS_NODE: '1', ...(process.platform === 'win32' && process.env.SystemRoot
+        ? { SystemRoot: process.env.SystemRoot } : {}) },
+      cwd: __dirname, serialization: 'advanced',
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc']
+    });
+    let settled = false;
+    const finish = (error?: Error, result?: PdfText) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      // Kill even after a successful reply: parser cleanup must never delay completion.
+      child.kill('SIGKILL');
+      if (error) reject(error);
+      else resolve(result!);
+    };
+    const cancel = () => finish(new Error('PDFの読み込みをキャンセルしました。'));
+    const timer = setTimeout(() => finish(new Error('PDFの解析が15秒を超えたため中止しました。')), PDF_TIMEOUT_MS);
+    child.on('error', () => finish(new Error('PDF解析プロセスを起動・通信できませんでした。')));
+    child.on('exit', () => finish(new Error('PDFの解析を完了できませんでした。形式またはメモリ使用量を確認してください。')));
+    child.on('message', (message: unknown) => {
+      if (!message || typeof message !== 'object') {
+        finish(new Error('PDF解析の応答が不正です。')); return;
+      }
+      const result = message as Record<string, unknown>;
+      if (result.error === 'noText') {
+        finish(new Error('PDFに抽出可能な文字がありません。スキャン画像のOCRには対応していません。'));
+      } else if (typeof result.text === 'string' && result.text.length <= 40000 && typeof result.truncated === 'boolean') {
+        finish(undefined, { text: result.text, truncated: result.truncated });
+      } else {
+        finish(new Error('PDFを解析できませんでした。パスワード保護やファイル形式を確認してください。'));
+      }
+    });
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) { cancel(); return; }
+    child.send(bytes, error => {
+      if (error) finish(new Error('PDF解析プロセスへデータを送信できませんでした。'));
+    });
+  });
+}
+
+````
+
+### src/services/pdfWorker.ts
+
+````typescript
+
+import { dirname, join, sep } from 'node:path';
+
+const MAX_CHARS = 40000;
+
+// One input per process. No URL or credential is passed to the parser.
+process.once('message', (input: unknown) => { void run(input); });
+process.once('disconnect', () => process.exit(0));
+
+async function run(input: unknown): Promise<void> {
+  try {
+    if (!(input instanceof Uint8Array) || input.byteLength > 10 * 1024 * 1024) throw new Error('Invalid input');
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const assets = dirname(require.resolve('pdfjs-dist/package.json'));
+    const task = pdfjs.getDocument({
+      data: new Uint8Array(input), isEvalSupported: false, useSystemFonts: false, verbosity: 0,
+      cMapUrl: join(assets, 'cmaps') + sep, cMapPacked: true,
+      standardFontDataUrl: join(assets, 'standard_fonts') + sep
+    });
+    const document = await task.promise;
+    let text = '';
+    let truncated = document.numPages > 100;
+    let hasText = false;
+    for (let index = 1; index <= Math.min(document.numPages, 100); index++) {
+      const page = await document.getPage(index);
+      // Stream items so a page's entire text content is not retained at once.
+      const reader = page.streamTextContent().getReader();
+      text += `\n[PDF ${index}ページ]\n`;
+      let reachedLimit = text.length >= MAX_CHARS;
+      try {
+        while (!reachedLimit) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          for (const item of chunk.value.items) {
+            if (!('str' in item)) continue;
+            hasText ||= Boolean(item.str.trim());
+            const value = item.str + (item.hasEOL ? '\n' : ' ');
+            const remaining = MAX_CHARS - text.length;
+            text += value.slice(0, remaining);
+            if (value.length >= remaining) { reachedLimit = true; break; }
+          }
+        }
+      } finally {
+        if (reachedLimit) await reader.cancel();
+        reader.releaseLock();
+        page.cleanup();
+      }
+      if (reachedLimit) { truncated = true; break; }
+    }
+    if (!hasText) reply({ error: 'noText' });
+    else reply({ text: text.slice(0, MAX_CHARS), truncated });
+  } catch {
+    reply({ error: 'invalidPdf' });
+  }
+}
+
+function reply(message: object): void {
+  if (!process.connected || !process.send) { process.exit(0); return; }
+  process.send(message, () => process.exit(0));
+}
+
+````
+
+### src/services/promptBuilder.ts
+
+````typescript
+
 import { FileContext, ImageAttachment, Message } from '../types/ai';
 import { LinkSource } from './linkReader';
 import { TextAttachment } from './fileAttachments';
@@ -1835,20 +2007,24 @@ export function chatPrompt(history: readonly Message[], text: string, context?: 
     ] : content }
   ];
 }
+
 ````
 
-## src/services/toritsuAiClient.ts
+### src/services/toritsuAiClient.ts
 
 ````typescript
+
 import { ClientConfig, Message } from '../types/ai';
 import { LlmClient } from './llmClient';
+import { ApiProtocol, OpenAiCompatibleProtocol } from './apiProtocol';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
 
 export class ToritsuAiClient implements LlmClient {
   constructor(
     private readonly getConfig: () => ClientConfig,
-    private readonly getApiKey: () => PromiseLike<string | undefined>
+    private readonly getApiKey: () => PromiseLike<string | undefined>,
+    private readonly protocol: ApiProtocol = new OpenAiCompatibleProtocol()
   ) {}
 
   async complete(messages: readonly Message[], signal?: AbortSignal): Promise<string> {
@@ -1880,24 +2056,17 @@ export class ToritsuAiClient implements LlmClient {
       ? Math.min(config.timeoutMs!, 600000) : 180000;
     const timer = setTimeout(cancel, timeoutMs);
     try {
-      const headers = new Headers({ 'Content-Type': 'application/json' });
-      headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
-      // 都立AI仕様の確定後は、このリクエストとレスポンス変換を差し替える。
+      const headers = this.protocol.headers(config, key);
       const response = await fetch(url, {
         method: 'POST', headers, redirect: 'error', signal: controller.signal,
-        body: JSON.stringify({ model: config.model, messages, temperature: 0.2 })
+        body: JSON.stringify(this.protocol.request(config, messages))
       });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
       }
       const body: unknown = await response.json();
-      const content = (body as { choices?: { message?: { content?: unknown } }[] } | null)
-        ?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string' || !content.trim()) {
-        throw new Error('API応答に空でない choices[0].message.content がありません。');
-      }
-      return content;
+      return this.protocol.response(body);
     } catch (error) {
       if (controller.signal.aborted) {
         throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
@@ -1910,11 +2079,13 @@ export class ToritsuAiClient implements LlmClient {
     }
   }
 }
+
 ````
 
-## src/types/ai.ts
+### src/types/ai.ts
 
 ````typescript
+
 export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
 export interface ImageAttachment { name: string; dataUrl: string }
@@ -1939,24 +2110,29 @@ export interface ClientConfig {
   apiKeyPrefix: string;
   timeoutMs?: number;
 }
+
 ````
 
-## src/utils/extractCode.ts
+### src/utils/extractCode.ts
 
 ````typescript
+
+import { sanitizeResponse } from './sanitizeResponse';
+
 export function extractCode(response: string): string {
   // サーバーが指示に反してコードフェンスだけで包んだ場合にも対応。
   // 通常のコードはtrimせず、インデントと末尾改行を維持する。
-  const fenced = /^\s*```[^\r\n]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(response);
-  const code = fenced ? fenced[1] : response;
+  const code = sanitizeResponse(response);
   if (!code.trim()) throw new Error('空のコードが返されたため、選択範囲を変更しませんでした。');
   return code;
 }
+
 ````
 
-## src/utils/runRequest.ts
+### src/utils/runRequest.ts
 
 ````typescript
+
 import * as vscode from 'vscode';
 
 export async function runRequest<T>(title: string, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -1978,11 +2154,92 @@ export async function runRequest<T>(title: string, action: (signal: AbortSignal)
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '予期しないエラーが発生しました。';
 }
+
 ````
 
-## media/chat.css
+### src/utils/sanitizeResponse.ts
+
+````typescript
+
+/** Remove a single surrounding Markdown fence without trimming source indentation. */
+export function sanitizeResponse(response: string): string {
+  const fenced = /^\s*```[^\r\n]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(response);
+  return fenced ? fenced[1] : response;
+}
+
+````
+
+### 実行に必要な追加ファイル・テスト
+
+### .gitignore
+
+````text
+
+node_modules/
+dist/
+*.vsix
+*.log
+
+````
+
+### .vscodeignore
+
+````text
+
+.vscode/**
+src/**
+test/**
+tsconfig.json
+CODE.md
+dist/**/*.map
+*.vsix
+node_modules/pdfjs-dist/**/*.map
+node_modules/pdfjs-dist/build/**
+node_modules/pdfjs-dist/web/**
+node_modules/pdfjs-dist/legacy/web/**
+node_modules/pdfjs-dist/types/**
+
+````
+
+### .vscode/launch.json
+
+````json
+
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "Run Toritsu AI",
+    "type": "extensionHost",
+    "request": "launch",
+    "noDebug": true,
+    "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+    "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+    "preLaunchTask": "npm: compile"
+  }]
+}
+
+````
+
+### .vscode/tasks.json
+
+````json
+
+{
+  "version": "2.0.0",
+  "tasks": [{
+    "type": "npm",
+    "script": "compile",
+    "group": "build",
+    "problemMatcher": ["$tsc"]
+  }]
+}
+
+````
+
+### media/chat.css
 
 ````css
+
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -2102,11 +2359,13 @@ button:disabled { opacity: .4; cursor: default; }
 #sketch-canvas { display: block; width: 100%; aspect-ratio: 1000 / 620; border-radius: 8px; background: white; touch-action: none; cursor: crosshair; }
 .sketch-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 @media (min-width: 500px) { .add-menu small { display: inline; margin-left: 10px; font-size: 12px; } }
+
 ````
 
-## media/chat.js
+### media/chat.js
 
 ````javascript
+
 (() => {
   const vscode = acquireVsCodeApi();
   const el = id => document.getElementById(id);
@@ -2440,39 +2699,47 @@ button:disabled { opacity: .4; cursor: default; }
   });
   vscode.postMessage({ type: 'ready' });
 })();
+
 ````
 
-## media/icon.svg
+### media/icon.svg
 
 ````xml
+
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M4 3h16v14H9l-5 4V3Z M7 8l-2 2 2 2m10-4 2 2-2 2m-4-5-2 6"/></svg>
+
 ````
 
-## media/toolbar-dark.svg
+### media/toolbar-dark.svg
 
 ````xml
+
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
   <g fill="none" stroke="#C5C5C5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M5 3h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-9l-5 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/>
     <path d="m6.5 14 3-7 3 7m-5-2h4M16 7v7m-1.5-7h3m-3 7h3"/>
   </g>
 </svg>
+
 ````
 
-## media/toolbar-light.svg
+### media/toolbar-light.svg
 
 ````xml
+
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
   <g fill="none" stroke="#424242" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M5 3h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-9l-5 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/>
     <path d="m6.5 14 3-7 3 7m-5-2h4M16 7v7m-1.5-7h3m-3 7h3"/>
   </g>
 </svg>
+
 ````
 
-## test/approval.test.cjs
+### test/approval.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -2542,11 +2809,13 @@ test('確認の待機中にキャンセルされた送信を阻止', async () =>
   const promise = new ApprovalService().approveSend(controller.signal);
   controller.abort(); await assert.rejects(promise, /キャンセル/);
 });
+
 ````
 
-## test/auth.test.cjs
+### test/auth.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -2621,11 +2890,13 @@ test('入力キャンセルやキー削除後に遅れて返る入力では登�
   const pending = auth.signIn(); await auth.signOut(); resolve('must-not-store'); await pending;
   assert.equal(data.size, 0); assert.equal(auth.session, undefined);
 });
+
 ````
 
-## test/browserHandoff.test.cjs
+### test/browserHandoff.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -2671,11 +2942,13 @@ test('キャンセル済み・不正なブラウザURLでは操作しない', as
   await assert.rejects(new BrowserHandoff().open('質問', false), /HTTPS/);
   assert.equal(copied, undefined); assert.equal(opened, undefined);
 });
+
 ````
 
-## test/client.test.cjs
+### test/client.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -2776,11 +3049,13 @@ test('説明対象の選択と編集コンテキスト、チャット履歴', ()
   assert.deepEqual(messages.slice(1, 3), history);
   assert.deepEqual(JSON.parse(messages[3].content).context, context);
 });
+
 ````
 
-## test/connectionSetup.test.cjs
+### test/connectionSetup.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -2813,11 +3088,13 @@ test('接続先不明・キャンセルでは接続先を勝手に設定しな�
   const controller = new AbortController(); controller.abort();
   await assert.rejects(setup.ensureConnection(controller.signal), /キャンセル/);
 });
+
 ````
 
-## test/edit.test.cjs
+### test/edit.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -2897,11 +3174,13 @@ test('空選択、複数選択、入力キャンセル時は送信しない', as
   await editSelection(client);
   assert.equal(calls, 0);
 });
+
 ````
 
-## test/fileAttachments.test.cjs
+### test/fileAttachments.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -2951,11 +3230,13 @@ test('目標・添付本文・プラン指示をAPIメッセージに含める',
   assert.equal(payload.goal, '学習用アプリを作る'); assert.equal(payload.files[0].text, files[0].text);
   assert.equal(payload.files[0].id, undefined);
 });
+
 ````
 
-## test/history.test.cjs
+### test/history.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ChatHistory } = require('../dist/services/chatHistory');
@@ -3034,11 +3315,13 @@ test('保存失敗を通知し、不正な保存データを採用しない', as
   const invalid = new ChatHistory({ get: () => [{ id: 123 }, { id: 'bad', title: 'bad', updatedAt: 1, messages: [{ role: 'system', content: 'inject' }] }] });
   invalid.setAccount('a'); assert.deepEqual(invalid.recent, []);
 });
+
 ````
 
-## test/images.test.cjs
+### test/images.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { validateImages, MAX_IMAGE_BYTES } = require('../dist/services/imageAttachments');
@@ -3076,11 +3359,13 @@ test('枚数、1枚の容量、合計容量を制限', () => {
   assert.throws(() => validateImages([makeImage(MAX_IMAGE_BYTES + 1)]), /5MB/);
   assert.throws(() => validateImages(Array.from({ length: 3 }, () => makeImage(4 * 1024 * 1024))), /10MB/);
 });
+
 ````
 
-## test/linkFlow.test.cjs
+### test/linkFlow.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -3186,11 +3471,13 @@ test('ブラウザ版への引き継ぎではAPIを呼ばず、下書きの添�
   assert.equal(state().files.length, 1); assert.deepEqual(state().messages, []);
   assert.equal(state().browserMode, true); assert.match(state().notice, /コピーしました/);
 });
+
 ````
 
-## test/links.test.cjs
+### test/links.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const dns = require('node:dns/promises');
@@ -3283,11 +3570,13 @@ test('キャンセル済みの読み込みではHTTP接続しない', async t =>
   const controller = new AbortController(); controller.abort();
   await assert.rejects(new LinkReader().read('https://example.com', controller.signal), /キャンセル/);
 });
+
 ````
 
-## test/modelCatalog.test.cjs
+### test/modelCatalog.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ApiModelCatalog } = require('../dist/services/modelCatalog');
@@ -3337,11 +3626,13 @@ test('取得中のキャンセルを伝播する', async t => {
   });
   await assert.rejects(catalog().listModels(controller.signal), /キャンセル/);
 });
+
 ````
 
-## test/models.test.cjs
+### test/models.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
@@ -3415,11 +3706,13 @@ test('ログアウトなどによる取得中断時はモデルを変更しな�
   await models.select('custom', controller.signal);
   assert.equal(config.model, 'original'); assert.equal(prompts, 0);
 });
+
 ````
 
-## test/pdfParser.test.cjs
+### test/pdfParser.test.cjs
 
 ````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -3501,11 +3794,61 @@ test('大きすぎる結果・解析失敗・起動失敗をエラーとして�
   child.emit('error', new Error('spawn failure'));
   await assert.rejects(pending, /起動・通信/);
 });
+
 ````
 
-## test/timeouts.test.cjs
+### test/protocol.test.cjs
 
 ````javascript
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { ToritsuAiClient } = require('../dist/services/toritsuAiClient');
+const { extractCode } = require('../dist/utils/extractCode');
+const config = { baseUrl: 'https://gateway.example/api', model: 'example-model', chatEndpoint: '/chat', authHeader: 'X-API-Key', apiKeyPrefix: '' };
+
+test('default protocol sends configured auth and body through fetch and preserves code', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(url.href, 'https://gateway.example/api/chat');
+    assert.equal(init.headers.get('X-API-Key'), 'test-key');
+    assert.equal(init.redirect, 'error');
+    assert.deepEqual(JSON.parse(init.body), { model: 'example-model', messages: [{ role: 'user', content: 'test' }], temperature: 0.2 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '  x\n' } }] }));
+  });
+  const client = new ToritsuAiClient(() => config, async () => 'test-key');
+  assert.equal(await client.complete([{ role: 'user', content: 'test' }]), '  x\n');
+});
+
+test('alternate protocol changes authentication and request/response without command changes', async t => {
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    assert.equal(init.headers.get('Authorization'), 'Custom test-key');
+    assert.deepEqual(JSON.parse(init.body), { deployment: 'example-model', input: [] });
+    return new Response('{"answer":"custom answer"}');
+  });
+  const protocol = {
+    headers: (_config, key) => new Headers({ Authorization: 'Custom ' + key }),
+    request: (config, messages) => ({ deployment: config.model, input: messages }),
+    response: body => body.answer
+  };
+  assert.equal(await new ToritsuAiClient(() => config, async () => 'test-key', protocol).complete([]), 'custom answer');
+});
+
+test('malformed responses fail without leaking body; fences preserve source formatting', async t => {
+  for (const body of ['null', '{}', '{"choices":[{"message":{"content":5}}]}', 'private server detail']) {
+    t.mock.method(globalThis, 'fetch', async () => new Response(body));
+    await assert.rejects(new ToritsuAiClient(() => config, async () => 'test-key').complete([]), error => /API応答|解析/.test(error.message) && !error.message.includes('private'));
+  }
+  assert.equal(extractCode('```ts\n  const x = 1;\n```'), '  const x = 1;');
+  assert.equal(extractCode('  const x = 1;\n'), '  const x = 1;\n');
+  assert.throws(() => extractCode('```ts\n\n```'), /空/);
+});
+
+````
+
+### test/timeouts.test.cjs
+
+````javascript
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { ToritsuAiClient } = require('../dist/services/toritsuAiClient');
@@ -3534,11 +3877,13 @@ test('サーバーが返したHTTP 504をローカル待機時間の問題と区
   const client = new ToritsuAiClient(() => base, async () => 'dummy');
   await assert.rejects(client.complete([]), error => /HTTP 504/.test(error.message) && !/180秒/.test(error.message));
 });
+
 ````
 
-## test/vscode.smoke.cjs
+### test/vscode.smoke.cjs
 
 ````javascript
+
 const assert = require('node:assert/strict');
 const vscode = require('vscode');
 
@@ -3558,20 +3903,22 @@ exports.run = async function () {
   await vscode.commands.executeCommand('toritsuAI.signOut');
   console.log('Toritsu AI: activation and chat opening smoke test passed');
 };
+
 ````
 
-## package-lock.json
+### package-lock.json
 
 ````json
+
 {
   "name": "toritsu-ai",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -6085,11 +6432,15 @@ exports.run = async function () {
     }
   }
 }
+
 ````
 
-## README.md
+## 5. README.md
+
+### README.md
 
 ````markdown
+
 # 都立AI VS Code Extension
 
 TypeScript / VS Code Extension APIによるコード説明、選択範囲の自然言語編集、サイドバーチャット。
@@ -6319,15 +6670,56 @@ API提供元のURLとキーを設定し、モデル一覧から選択してく�
 添付されたライセンス一覧からモデルIDは特定できません。ライブラリの「Model License」はAIモデル名ではありません。
 
 チャットの待機時間は `toritsuAI.requestTimeoutSeconds`（10〜600秒）、モデル一覧は `toritsuAI.modelListTimeoutSeconds`（5〜120秒）で変更できます。中止・キー削除は待機時間に関係なく通信を中断します。これらは拡張側の制限で、サーバーが返すHTTP 504等や、認証仕様の不一致を解決する設定ではありません。
+
+## セキュリティと運用の前提
+
+- 機密情報・個人情報を不用意に送信しないでください。選択編集は選択範囲だけでなくファイル全文・言語・パスを送信します。
+- 生成結果は必ず人間が確認し、著作権やライセンスにも注意してください。
+- 公開環境へ送れる情報と閉域環境だけで扱う情報を分け、接続先の利用条件・組織の運用ルールに従ってください。
+- 入力が再学習に使われないこと、通信経路の情報管理、学習データと著作権配慮の透明性を、利用するサービスの契約・規約・運用資料で確認してください。本拡張がこれらを保証するものではありません。条件を確認できない接続先には保護対象データを送らないでください。
+- APIキーはSecretStorageへ保存します。設定ファイル・ソースコードに書かないでください。通信はHTTPS前提です（ローカル開発のみHTTPを許可）。
+
+## 接続部品と今後の拡張
+
+正式な都立AIの外部API仕様、接続先、モデルIDは未確定です。OpenAI互換の仮実装であり、ブラウザ版のURLやログイン情報だけで接続できることは保証しません。
+`services/apiProtocol.ts` の `ApiProtocol` が認証ヘッダー・リクエスト生成・レスポンス解析を分離しています。`ToritsuAiClient` の第3引数へ専用実装を渡すことで差し替えられます。未確定APIに関するTODOはこの部品に記載しています。
+
+`baseUrl` と `chatEndpoint` で専用ゲートウェイのURL・パスを、`authHeader` と `apiKeyPrefix` で認証形式を設定できます。Azure等の追加パラメータ・認証フロー・プロキシの特殊要件は対応するクライアント実装を追加してください。Azureへの直接接続を実装済みという意味ではありません。
+共通の `LlmClient.complete` を使うため、通信方式を変更してもコマンドとUIを維持できます。モデル一覧APIが独自仕様の場合は `ApiModelCatalog` も差し替えます。
+
+今後の拡張案:
+
+- `InlineCompletionItemProvider` から共通クライアントを呼び、キャンセル対応のインライン補完を追加する。
+- 選択編集の `beforeApply` フックを使って差分確認画面を表示し、現在のバージョン検証後に適用する。
+- `LlmClient` のラッパーで監査ログを集約する。本文やキーは保存せず、利用規定に合わせて結果・時間など必要最小限の記録を扱う。現在、監査ログ送信は行わない。
+- 閉域向けゲートウェイや正式な都立AI認証はクライアント層に実装し、画面・コマンドから切り離す。
+
 ````
 
-## 起動方法
+## 6. 実行方法
 
 ```bash
+
 cd /Users/hiromichi/Documents/github/app/toritsu-ai-vscode
+
 npm ci
+
+npm run compile
+
 npm test
+
 npm run package
+
 ```
 
-VS Codeの `Extensions: Install from VSIX...` で `toritsu-ai.vsix` を選択し、`Developer: Reload Window` を実行します。都立AIの「APIキーを登録」からキーを保存し、API接続先とモデルを設定してください。URLを貼り付けて「リンクを読み込む」を押すと、Webページ・PDFを参考資料として確認し、作成指示と一緒に送信できます。
+VS Codeでこのフォルダーを開いてF5を押すと開発用ウィンドウが起動します。通常のVS Codeには `Extensions: Install from VSIX...` で `toritsu-ai.vsix` をインストールし、`Developer: Reload Window` を実行してください。都立AIの「APIキーを登録」からキー、API接続先、モデルを設定します。正式な接続先・モデルIDは提供元の案内に従ってください。
+
+## 7. 今後の拡張案
+
+- InlineCompletionItemProviderからLlmClientを利用するインライン補完。
+
+- beforeApplyフックを利用する差分プレビュー。
+
+- ApiProtocolまたはLlmClientの専用実装による正式な都立AI・Azure・専用ゲートウェイ接続。
+
+- 共通クライアントを包む監査ログ部品。入力本文やAPIキーは記録しない。

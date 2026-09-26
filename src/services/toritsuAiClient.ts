@@ -1,12 +1,14 @@
 import { ClientConfig, Message } from '../types/ai';
 import { LlmClient } from './llmClient';
+import { ApiProtocol, OpenAiCompatibleProtocol } from './apiProtocol';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
 
 export class ToritsuAiClient implements LlmClient {
   constructor(
     private readonly getConfig: () => ClientConfig,
-    private readonly getApiKey: () => PromiseLike<string | undefined>
+    private readonly getApiKey: () => PromiseLike<string | undefined>,
+    private readonly protocol: ApiProtocol = new OpenAiCompatibleProtocol()
   ) {}
 
   async complete(messages: readonly Message[], signal?: AbortSignal): Promise<string> {
@@ -38,24 +40,17 @@ export class ToritsuAiClient implements LlmClient {
       ? Math.min(config.timeoutMs!, 600000) : 180000;
     const timer = setTimeout(cancel, timeoutMs);
     try {
-      const headers = new Headers({ 'Content-Type': 'application/json' });
-      headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
-      // 都立AI仕様の確定後は、このリクエストとレスポンス変換を差し替える。
+      const headers = this.protocol.headers(config, key);
       const response = await fetch(url, {
         method: 'POST', headers, redirect: 'error', signal: controller.signal,
-        body: JSON.stringify({ model: config.model, messages, temperature: 0.2 })
+        body: JSON.stringify(this.protocol.request(config, messages))
       });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
       }
       const body: unknown = await response.json();
-      const content = (body as { choices?: { message?: { content?: unknown } }[] } | null)
-        ?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string' || !content.trim()) {
-        throw new Error('API応答に空でない choices[0].message.content がありません。');
-      }
-      return content;
+      return this.protocol.response(body);
     } catch (error) {
       if (controller.signal.aborted) {
         throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);

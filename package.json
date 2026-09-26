@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -190,5 +190,16 @@
     "cheerio": "^1.0.0",
     "ipaddr.js": "^2.2.0",
     "pdfjs-dist": "^4.10.38"
-  }
+  },
+  "activationEvents": [
+    "onView:toritsuAI.chat",
+    "onCommand:toritsuAI.setApiKey",
+    "onCommand:toritsuAI.explainCode",
+    "onCommand:toritsuAI.editSelection",
+    "onCommand:toritsuAI.openChat",
+    "onCommand:toritsuAI.signIn",
+    "onCommand:toritsuAI.signOut",
+    "onCommand:toritsuAI.showHistory",
+    "onCommand:toritsuAI.setupConnection"
+  ]
 }
