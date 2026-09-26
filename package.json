@@ -2,48 +2,143 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "publisher": "toritsu-ai-local",
   "private": true,
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hrmcngs/toritsu-ai-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.106.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./dist/extension.js",
-  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
   "contributes": {
     "commands": [
-      { "command": "toritsuAI.setApiKey", "title": "Toritsu AI: Set API Key" },
-      { "command": "toritsuAI.explainCode", "title": "Toritsu AI: Explain Code" },
-      { "command": "toritsuAI.editSelection", "title": "Toritsu AI: Edit Selection" },
-      { "command": "toritsuAI.openChat", "title": "Toritsu AI: Open Chat" }
+      {
+        "command": "toritsuAI.setApiKey",
+        "title": "Toritsu AI: Set API Key"
+      },
+      {
+        "command": "toritsuAI.explainCode",
+        "title": "Toritsu AI: Explain Code"
+      },
+      {
+        "command": "toritsuAI.editSelection",
+        "title": "Toritsu AI: Edit Selection"
+      },
+      {
+        "command": "toritsuAI.openChat",
+        "title": "Toritsu AI: Open Chat",
+        "shortTitle": "都立AI",
+        "icon": {
+          "light": "media/toolbar-light.svg",
+          "dark": "media/toolbar-dark.svg"
+        }
+      },
+      {
+        "command": "toritsuAI.signIn",
+        "title": "Toritsu AI: Sign In"
+      },
+      {
+        "command": "toritsuAI.signOut",
+        "title": "Toritsu AI: Sign Out"
+      }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "toritsuAI.openChat",
+          "group": "navigation@10"
+        }
+      ]
+    },
     "viewsContainers": {
-      "activitybar": [{ "id": "toritsuAI", "title": "都立AI", "icon": "media/icon.svg" }]
+      "secondarySidebar": [
+        {
+          "id": "toritsuAI-secondary",
+          "title": "都立AI",
+          "icon": "media/icon.svg"
+        }
+      ]
     },
     "views": {
-      "toritsuAI": [{ "type": "webview", "id": "toritsuAI.chat", "name": "都立AI Chat" }]
+      "toritsuAI-secondary": [
+        {
+          "type": "webview",
+          "id": "toritsuAI.chat",
+          "name": "都立AI"
+        }
+      ]
     },
     "configuration": {
       "title": "Toritsu AI",
       "properties": {
         "toritsuAI.baseUrl": {
-          "type": "string", "default": "", "scope": "machine",
+          "type": "string",
+          "default": "",
+          "scope": "machine",
           "description": "APIのルートURL。例: https://ai.example.jp（/v1はendpoint側に指定）"
         },
         "toritsuAI.model": {
-          "type": "string", "default": "", "scope": "machine",
+          "type": "string",
+          "default": "",
+          "scope": "machine",
           "description": "接続先で利用できるモデルID"
         },
         "toritsuAI.chatEndpoint": {
-          "type": "string", "default": "/v1/chat/completions", "scope": "machine",
+          "type": "string",
+          "default": "/v1/chat/completions",
+          "scope": "machine",
           "description": "baseUrlに追加するチャットAPIパス"
         },
         "toritsuAI.authHeader": {
-          "type": "string", "default": "Authorization", "scope": "machine",
+          "type": "string",
+          "default": "Authorization",
+          "scope": "machine",
           "description": "APIキーを渡すヘッダー名"
         },
         "toritsuAI.apiKeyPrefix": {
-          "type": "string", "default": "Bearer", "scope": "machine",
+          "type": "string",
+          "default": "Bearer",
+          "scope": "machine",
           "description": "APIキーの接頭辞。空欄ならキーのみ。接頭辞とキーの間に空白を追加"
+        },
+        "toritsuAI.approvalMode": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto",
+            "full"
+          ],
+          "default": "auto",
+          "scope": "machine",
+          "enumDescriptions": [
+            "API送信と選択編集の適用前に確認",
+            "ワークスペース外の選択編集だけ確認",
+            "対応するAPI送信と選択編集の確認を省略"
+          ],
+          "description": "操作の承認設定。任意ファイル操作やシェル実行を追加する設定ではありません。"
+        },
+        "toritsuAI.fastModel": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "高速モデルとして選択するAPIのモデルID。接続先で利用できる正確なIDを指定してください。"
+        },
+        "toritsuAI.reasoningModel": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "推論モデルとして選択するAPIのモデルID。接続先で利用できる正確なIDを指定してください。"
         }
       }
     }
@@ -52,11 +147,21 @@
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
     "vscode:prepublish": "npm run compile",
+    "package": "vsce package --skip-license --out toritsu-ai.vsix",
     "test": "npm run compile && node --test test/*.test.cjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^4.0.0",
     "typescript": "~5.6.3"
+  },
+  "extensionDependencies": [
+    "vscode.microsoft-authentication"
+  ],
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "ipaddr.js": "^2.2.0",
+    "pdfjs-dist": "^4.10.38"
   }
 }

@@ -4,6 +4,7 @@
     "name": "Run Toritsu AI",
     "type": "extensionHost",
     "request": "launch",
+    "noDebug": true,
     "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
     "outFiles": ["${workspaceFolder}/dist/**/*.js"],
     "preLaunchTask": "npm: compile"

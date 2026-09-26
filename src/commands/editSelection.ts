@@ -5,7 +5,10 @@ import { editPrompt } from '../services/promptBuilder';
 import { extractCode } from '../utils/extractCode';
 import { runRequest } from '../utils/runRequest';
 
-export async function editSelection(client: LlmClient): Promise<void> {
+export async function editSelection(
+  client: LlmClient,
+  beforeApply: (uri: vscode.Uri, code: string) => Promise<void> = async () => {}
+): Promise<void> {
   const editor = requireEditor();
   if (editor.selections.length !== 1 || editor.selection.isEmpty) {
     throw new Error('編集したいコードを1か所選択してください。');
@@ -24,6 +27,7 @@ export async function editSelection(client: LlmClient): Promise<void> {
   const response = await runRequest('都立AI: 選択範囲を編集中', signal =>
     client.complete(editPrompt(context, instruction), signal));
   const code = extractCode(response);
+  await beforeApply(document.uri, code);
   if (document.isClosed || document.version !== version) {
     throw new Error('処理中に元のファイルが変更または閉じられたため、編集を適用しませんでした。再実行してください。');
   }
