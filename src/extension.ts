@@ -26,7 +26,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       model: config.get<string>('model', ''),
       chatEndpoint: config.get<string>('chatEndpoint', '/v1/chat/completions'),
       authHeader: config.get<string>('authHeader', 'Authorization'),
-      apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer')
+      apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer'),
+      timeoutMs: config.get<number>('requestTimeoutSeconds', 180) * 1000
     };
   }, () => context.secrets.get(API_KEY_SECRET));
   const approvals = new ApprovalService();
@@ -34,7 +35,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const catalog = new ApiModelCatalog(() => {
     const config = vscode.workspace.getConfiguration('toritsuAI');
     return { baseUrl: config.get<string>('baseUrl', ''), modelsEndpoint: config.get<string>('modelsEndpoint', '/v1/models'),
-      authHeader: config.get<string>('authHeader', 'Authorization'), apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer') };
+      authHeader: config.get<string>('authHeader', 'Authorization'), apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer'),
+      timeoutMs: config.get<number>('modelListTimeoutSeconds', 30) * 1000 };
   }, () => context.secrets.get(API_KEY_SECRET));
   const models = new ModelSelection(signal => catalog.listModels(signal), signal => setup.ensureConnection(signal));
   const readyClient: LlmClient = { complete: async (messages, signal) => {

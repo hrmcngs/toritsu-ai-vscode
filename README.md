@@ -184,7 +184,7 @@ Content-Type: application/json
 - `src/providers/chatViewProvider.ts`、`media/`: サイドバー。
 - `src/extension.ts`: 依存注入と登録。将来のinline completionでも同じLlmClientを利用できます。
 
-APIエラー、タイムアウト（60秒）、不正な応答、未設定時には日本語で表示します。
+APIエラー、タイムアウト（チャットは既定180秒、モデル一覧は30秒）、不正な応答、未設定時には日本語で表示します。
 レスポンス本文やキーをログ出力しません。自動再試行、ストリーミング、ツール実行は行いません。
 APIキーは設定ファイルに書かずSecretStorageに保存します。コードは設定したAPIへ送信されます。
 
@@ -238,3 +238,5 @@ APIの接続先が未設定なら、自動でブラウザ版モードになり�
 
 APIによる拡張内チャットを使うには、管理者・提供元から案内されたAPIのURLとキーが必要です。ブラウザ版のURL・Microsoftログインはその代わりにはなりません。
 `Toritsu AI: Setup Connection` または設定ボタンの「接続設定を始める」で設定できます。API接続時にモデルが未設定なら一覧から選択します。一覧API非対応時には利用可能なIDを自動判定できません。
+
+チャットの待機時間は `toritsuAI.requestTimeoutSeconds`（10〜600秒）、モデル一覧は `toritsuAI.modelListTimeoutSeconds`（5〜120秒）で変更できます。中止・ログアウトは待機時間に関係なく通信を中断します。これらは拡張側の制限で、サーバーが返すHTTP 504等や、認証仕様の不一致を解決する設定ではありません。

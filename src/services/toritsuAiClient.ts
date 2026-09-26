@@ -34,7 +34,9 @@ export class ToritsuAiClient implements LlmClient {
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
-    const timer = setTimeout(cancel, config.timeoutMs ?? 60000);
+    const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs! > 0
+      ? Math.min(config.timeoutMs!, 600000) : 180000;
+    const timer = setTimeout(cancel, timeoutMs);
     try {
       const headers = new Headers({ 'Content-Type': 'application/json' });
       headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
@@ -56,7 +58,7 @@ export class ToritsuAiClient implements LlmClient {
       return content;
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : 'APIがタイムアウトしました（60秒）。');
+        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
       }
       if (error instanceof Error && /^(APIエラー|API応答)/.test(error.message)) throw error;
       throw new Error('APIへの接続または応答の解析に失敗しました。URL、ネットワーク、API仕様を確認してください。');

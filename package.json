@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -170,6 +170,22 @@
           "default": "https://ai.metro.tokyo.lg.jp/",
           "scope": "machine",
           "description": "質問を引き継ぐブラウザ版のURL。API接続先とは別です。"
+        },
+        "toritsuAI.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 10,
+          "maximum": 600,
+          "scope": "machine",
+          "description": "APIの応答を待つ秒数。接続先サーバー自身のタイムアウトは変更しません。"
+        },
+        "toritsuAI.modelListTimeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 120,
+          "scope": "machine",
+          "description": "モデル一覧APIの応答を待つ秒数。"
         }
       }
     }

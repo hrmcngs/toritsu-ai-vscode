@@ -9,7 +9,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -177,6 +177,22 @@
           "default": "https://ai.metro.tokyo.lg.jp/",
           "scope": "machine",
           "description": "質問を引き継ぐブラウザ版のURL。API接続先とは別です。"
+        },
+        "toritsuAI.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 10,
+          "maximum": 600,
+          "scope": "machine",
+          "description": "APIの応答を待つ秒数。接続先サーバー自身のタイムアウトは変更しません。"
+        },
+        "toritsuAI.modelListTimeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 120,
+          "scope": "machine",
+          "description": "モデル一覧APIの応答を待つ秒数。"
         }
       }
     }
@@ -405,7 +421,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       model: config.get<string>('model', ''),
       chatEndpoint: config.get<string>('chatEndpoint', '/v1/chat/completions'),
       authHeader: config.get<string>('authHeader', 'Authorization'),
-      apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer')
+      apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer'),
+      timeoutMs: config.get<number>('requestTimeoutSeconds', 180) * 1000
     };
   }, () => context.secrets.get(API_KEY_SECRET));
   const approvals = new ApprovalService();
@@ -413,7 +430,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const catalog = new ApiModelCatalog(() => {
     const config = vscode.workspace.getConfiguration('toritsuAI');
     return { baseUrl: config.get<string>('baseUrl', ''), modelsEndpoint: config.get<string>('modelsEndpoint', '/v1/models'),
-      authHeader: config.get<string>('authHeader', 'Authorization'), apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer') };
+      authHeader: config.get<string>('authHeader', 'Authorization'), apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer'),
+      timeoutMs: config.get<number>('modelListTimeoutSeconds', 30) * 1000 };
   }, () => context.secrets.get(API_KEY_SECRET));
   const models = new ModelSelection(signal => catalog.listModels(signal), signal => setup.ensureConnection(signal));
   const readyClient: LlmClient = { complete: async (messages, signal) => {
@@ -1658,6 +1676,7 @@ export interface ModelCatalogConfig {
   modelsEndpoint: string;
   authHeader: string;
   apiKeyPrefix: string;
+  timeoutMs?: number;
 }
 
 export interface ModelCatalog { listModels(signal?: AbortSignal): Promise<string[]> }
@@ -1686,7 +1705,9 @@ export class ApiModelCatalog implements ModelCatalog {
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
-    const timer = setTimeout(cancel, 15000);
+    const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs! > 0
+      ? Math.min(config.timeoutMs!, 120000) : 30000;
+    const timer = setTimeout(cancel, timeoutMs);
     try {
       const headers = new Headers({ Accept: 'application/json' });
       headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
@@ -1717,7 +1738,7 @@ export class ApiModelCatalog implements ModelCatalog {
       if (controller.signal.aborted) throw new Error('モデル一覧の取得を中止しました。');
       return [...new Set(ids)].sort();
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : 'モデル一覧の取得がタイムアウトしました。');
+      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `モデル一覧の取得がタイムアウトしました（${timeoutMs / 1000}秒）。modelListTimeoutSecondsを調整できます。`);
       if (error instanceof Error && /^(モデル|利用できる)/.test(error.message)) throw error;
       throw new Error('モデル一覧に接続できませんでした。接続設定と一覧APIの対応状況を確認してください。');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
@@ -1874,7 +1895,9 @@ export class ToritsuAiClient implements LlmClient {
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
-    const timer = setTimeout(cancel, config.timeoutMs ?? 60000);
+    const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs! > 0
+      ? Math.min(config.timeoutMs!, 600000) : 180000;
+    const timer = setTimeout(cancel, timeoutMs);
     try {
       const headers = new Headers({ 'Content-Type': 'application/json' });
       headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
@@ -1896,7 +1919,7 @@ export class ToritsuAiClient implements LlmClient {
       return content;
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : 'APIがタイムアウトしました（60秒）。');
+        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
       }
       if (error instanceof Error && /^(APIエラー|API応答)/.test(error.message)) throw error;
       throw new Error('APIへの接続または応答の解析に失敗しました。URL、ネットワーク、API仕様を確認してください。');
@@ -3525,6 +3548,39 @@ test('大きすぎる結果・解析失敗・起動失敗をエラーとして�
 });
 ````
 
+## test/timeouts.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { ToritsuAiClient } = require('../dist/services/toritsuAiClient');
+const { ApiModelCatalog } = require('../dist/services/modelCatalog');
+const base = { baseUrl: 'https://example.com', model: 'example', chatEndpoint: '/v1/chat/completions', modelsEndpoint: '/v1/models', authHeader: 'Authorization', apiKeyPrefix: 'Bearer' };
+
+for (const [title, expected, options, kind] of [
+  ['チャットの標準待機時間は180秒', 180000, {}, 'chat'],
+  ['チャットの設定した待機時間をエラーにも反映', 450000, { timeoutMs: 450000 }, 'chat'],
+  ['モデル一覧の標準待機時間は30秒', 30000, {}, 'models'],
+  ['モデル一覧の待機時間を変更できる', 90000, { timeoutMs: 90000 }, 'models']
+]) test(title, async t => {
+  t.mock.method(global, 'setTimeout', (callback, ms) => { assert.equal(ms, expected); queueMicrotask(callback); return 1; });
+  t.mock.method(global, 'clearTimeout', () => {});
+  t.mock.method(global, 'fetch', async (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    if (signal.aborted) reject(new Error('aborted'));
+  }));
+  const client = kind === 'chat' ? new ToritsuAiClient(() => ({ ...base, ...options }), async () => 'dummy')
+    : new ApiModelCatalog(() => ({ ...base, ...options }), async () => 'dummy');
+  await assert.rejects(kind === 'chat' ? client.complete([]) : client.listModels(), new RegExp(`タイムアウト.*${expected / 1000}秒`));
+});
+
+test('サーバーが返したHTTP 504をローカル待機時間の問題と区別する', async t => {
+  t.mock.method(global, 'fetch', async () => new Response('', { status: 504 }));
+  const client = new ToritsuAiClient(() => base, async () => 'dummy');
+  await assert.rejects(client.complete([]), error => /HTTP 504/.test(error.message) && !/180秒/.test(error.message));
+});
+````
+
 ## test/vscode.smoke.cjs
 
 ````javascript
@@ -3554,13 +3610,13 @@ exports.run = async function () {
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -6265,7 +6321,7 @@ Content-Type: application/json
 - `src/providers/chatViewProvider.ts`、`media/`: サイドバー。
 - `src/extension.ts`: 依存注入と登録。将来のinline completionでも同じLlmClientを利用できます。
 
-APIエラー、タイムアウト（60秒）、不正な応答、未設定時には日本語で表示します。
+APIエラー、タイムアウト（チャットは既定180秒、モデル一覧は30秒）、不正な応答、未設定時には日本語で表示します。
 レスポンス本文やキーをログ出力しません。自動再試行、ストリーミング、ツール実行は行いません。
 APIキーは設定ファイルに書かずSecretStorageに保存します。コードは設定したAPIへ送信されます。
 
@@ -6319,6 +6375,8 @@ APIの接続先が未設定なら、自動でブラウザ版モードになり�
 
 APIによる拡張内チャットを使うには、管理者・提供元から案内されたAPIのURLとキーが必要です。ブラウザ版のURL・Microsoftログインはその代わりにはなりません。
 `Toritsu AI: Setup Connection` または設定ボタンの「接続設定を始める」で設定できます。API接続時にモデルが未設定なら一覧から選択します。一覧API非対応時には利用可能なIDを自動判定できません。
+
+チャットの待機時間は `toritsuAI.requestTimeoutSeconds`（10〜600秒）、モデル一覧は `toritsuAI.modelListTimeoutSeconds`（5〜120秒）で変更できます。中止・ログアウトは待機時間に関係なく通信を中断します。これらは拡張側の制限で、サーバーが返すHTTP 504等や、認証仕様の不一致を解決する設定ではありません。
 ````
 
 ## 起動方法

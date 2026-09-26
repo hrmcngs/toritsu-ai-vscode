@@ -3,6 +3,7 @@ export interface ModelCatalogConfig {
   modelsEndpoint: string;
   authHeader: string;
   apiKeyPrefix: string;
+  timeoutMs?: number;
 }
 
 export interface ModelCatalog { listModels(signal?: AbortSignal): Promise<string[]> }
@@ -31,7 +32,9 @@ export class ApiModelCatalog implements ModelCatalog {
     const cancel = () => controller.abort();
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) cancel();
-    const timer = setTimeout(cancel, 15000);
+    const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs! > 0
+      ? Math.min(config.timeoutMs!, 120000) : 30000;
+    const timer = setTimeout(cancel, timeoutMs);
     try {
       const headers = new Headers({ Accept: 'application/json' });
       headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
@@ -62,7 +65,7 @@ export class ApiModelCatalog implements ModelCatalog {
       if (controller.signal.aborted) throw new Error('モデル一覧の取得を中止しました。');
       return [...new Set(ids)].sort();
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : 'モデル一覧の取得がタイムアウトしました。');
+      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `モデル一覧の取得がタイムアウトしました（${timeoutMs / 1000}秒）。modelListTimeoutSecondsを調整できます。`);
       if (error instanceof Error && /^(モデル|利用できる)/.test(error.message)) throw error;
       throw new Error('モデル一覧に接続できませんでした。接続設定と一覧APIの対応状況を確認してください。');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
