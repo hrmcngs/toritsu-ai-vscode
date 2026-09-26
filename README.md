@@ -67,6 +67,9 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 APIキー・Microsoftトークン・ブラウザのCookieをリンク先には送信しません。
 公開HTTP/HTTPSの標準ポートのみ対応し、ローカル・プライベートIPへの接続を拒否します。
 リダイレクト先も確認します。1リンクの読み込みは30秒を目安にタイムアウトし、中止ボタンで止められます。
+PDF解析は専用の子プロセスで行い、解析開始から15秒を超えた場合やキャンセル時には強制終了します。
+子プロセスのV8 old-spaceヒープは256MiBに制限し、APIキーなどの環境変数は引き継ぎません。
+この設定はプロセス全体のメモリ（RSS）を制限するものではなく、OSのセキュリティサンドボックスでもありません。
 
 リンク先の取得とAIへの送信は別の操作です。毎回確認モードでは両方で確認します。
 リンクを含む質問は、先に資料を読み込んでから送信してください。
@@ -170,6 +173,7 @@ Content-Type: application/json
 - `src/services/approvalService.ts`: 承認モードの保存とAPI送信・編集の確認。
 - `src/services/imageAttachments.ts`: 画像形式・容量のホスト側検証。
 - `src/services/linkReader.ts`: 公開リンクの取得、HTML・PDF本文の抽出。
+- `src/services/pdfParser.ts` / `pdfWorker.ts`: PDF解析用の子プロセス、時間制限とキャンセル。
 - `src/services/toritsuAiClient.ts`: HTTP、認証、タイムアウト、応答変換。専用API対応の変更箇所。
 - `src/services/promptBuilder.ts`: 用途ごとのプロンプト。
 - `src/services/contextCollector.ts`: 未保存内容を含むエディター情報収集。

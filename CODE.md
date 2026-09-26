@@ -9,7 +9,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -975,7 +975,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import { loadBuffer } from 'cheerio';
 import * as ipaddr from 'ipaddr.js';
-import { dirname, join, sep } from 'node:path';
+import { parsePdf } from './pdfParser';
 
 export interface LinkSource {
   originalUrl: string;
@@ -1060,34 +1060,9 @@ export async function parseLinkContent(bytes: Buffer, contentType: string, signa
   let text = '';
   let truncated = false;
   if (bytes.subarray(0, 5).toString() === '%PDF-') {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const assets = dirname(require.resolve('pdfjs-dist/package.json'));
-    const task = pdfjs.getDocument({
-      data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true, verbosity: 0,
-      cMapUrl: join(assets, 'cmaps') + sep, cMapPacked: true,
-      standardFontDataUrl: join(assets, 'standard_fonts') + sep
-    });
-    const cancel = () => { void task.destroy().catch(() => {}); };
-    signal?.addEventListener('abort', cancel, { once: true });
-    try {
-      if (signal?.aborted) throw new Error('読み込みをキャンセルしました。');
-      const document = await task.promise;
-      for (let index = 1; index <= Math.min(document.numPages, 100); index++) {
-        if (signal?.aborted) throw new Error('読み込みをキャンセルしました。');
-        const page = await document.getPage(index);
-        const content = await page.getTextContent();
-        text += `\n[PDF ${index}ページ]\n` + content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('');
-        page.cleanup();
-        if (text.length > MAX_SOURCE_CHARS) { truncated = true; break; }
-      }
-      truncated ||= document.numPages > 100;
-      if (!text.replace(/\[PDF \d+ページ\]/g, '').trim()) {
-        throw new Error('PDFに抽出可能な文字がありません。スキャン画像のOCRには対応していません。');
-      }
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-      await task.destroy();
-    }
+    const parsed = await parsePdf(bytes, signal);
+    text = parsed.text;
+    truncated = parsed.truncated;
   } else if (/text\/html|application\/xhtml\+xml/i.test(contentType)) {
     const charset = /charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType)?.[1];
     const $ = loadBuffer(bytes, { encoding: { defaultEncoding: 'utf-8', transportLayerEncodingLabel: charset } });
@@ -1131,6 +1106,131 @@ export class LinkReader {
       throw new Error('リンクを読み込めませんでした。URL・ネットワーク・PDFの形式を確認してください。');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
+}
+````
+
+## src/services/pdfParser.ts
+
+````typescript
+import { fork } from 'node:child_process';
+import { join } from 'node:path';
+
+export interface PdfText { text: string; truncated: boolean }
+export const PDF_TIMEOUT_MS = 15000;
+export const PDF_HEAP_MB = 256;
+
+/** Keep parser work off the extension host; the parent owns cancellation and the deadline. */
+export function parsePdf(bytes: Buffer, signal?: AbortSignal): Promise<PdfText> {
+  if (signal?.aborted) return Promise.reject(new Error('PDFの読み込みをキャンセルしました。'));
+  if (bytes.length > 10 * 1024 * 1024) return Promise.reject(new Error('読み込めるファイルは10MBまでです。'));
+  return new Promise((resolve, reject) => {
+    // Do not inherit API keys, NODE_OPTIONS, or extension-host debug flags.
+    // ELECTRON_RUN_AS_NODE also supports desktop VS Code's Electron executable.
+    const child = fork(join(__dirname, 'pdfWorker.js'), [], {
+      execArgv: [`--max-old-space-size=${PDF_HEAP_MB}`],
+      env: { ELECTRON_RUN_AS_NODE: '1', ...(process.platform === 'win32' && process.env.SystemRoot
+        ? { SystemRoot: process.env.SystemRoot } : {}) },
+      cwd: __dirname, serialization: 'advanced',
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc']
+    });
+    let settled = false;
+    const finish = (error?: Error, result?: PdfText) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      // Kill even after a successful reply: parser cleanup must never delay completion.
+      child.kill('SIGKILL');
+      if (error) reject(error);
+      else resolve(result!);
+    };
+    const cancel = () => finish(new Error('PDFの読み込みをキャンセルしました。'));
+    const timer = setTimeout(() => finish(new Error('PDFの解析が15秒を超えたため中止しました。')), PDF_TIMEOUT_MS);
+    child.on('error', () => finish(new Error('PDF解析プロセスを起動・通信できませんでした。')));
+    child.on('exit', () => finish(new Error('PDFの解析を完了できませんでした。形式またはメモリ使用量を確認してください。')));
+    child.on('message', (message: unknown) => {
+      if (!message || typeof message !== 'object') {
+        finish(new Error('PDF解析の応答が不正です。')); return;
+      }
+      const result = message as Record<string, unknown>;
+      if (result.error === 'noText') {
+        finish(new Error('PDFに抽出可能な文字がありません。スキャン画像のOCRには対応していません。'));
+      } else if (typeof result.text === 'string' && result.text.length <= 40000 && typeof result.truncated === 'boolean') {
+        finish(undefined, { text: result.text, truncated: result.truncated });
+      } else {
+        finish(new Error('PDFを解析できませんでした。パスワード保護やファイル形式を確認してください。'));
+      }
+    });
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) { cancel(); return; }
+    child.send(bytes, error => {
+      if (error) finish(new Error('PDF解析プロセスへデータを送信できませんでした。'));
+    });
+  });
+}
+````
+
+## src/services/pdfWorker.ts
+
+````typescript
+import { dirname, join, sep } from 'node:path';
+
+const MAX_CHARS = 40000;
+
+// One input per process. No URL or credential is passed to the parser.
+process.once('message', (input: unknown) => { void run(input); });
+process.once('disconnect', () => process.exit(0));
+
+async function run(input: unknown): Promise<void> {
+  try {
+    if (!(input instanceof Uint8Array) || input.byteLength > 10 * 1024 * 1024) throw new Error('Invalid input');
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const assets = dirname(require.resolve('pdfjs-dist/package.json'));
+    const task = pdfjs.getDocument({
+      data: new Uint8Array(input), isEvalSupported: false, useSystemFonts: false, verbosity: 0,
+      cMapUrl: join(assets, 'cmaps') + sep, cMapPacked: true,
+      standardFontDataUrl: join(assets, 'standard_fonts') + sep
+    });
+    const document = await task.promise;
+    let text = '';
+    let truncated = document.numPages > 100;
+    let hasText = false;
+    for (let index = 1; index <= Math.min(document.numPages, 100); index++) {
+      const page = await document.getPage(index);
+      // Stream items so a page's entire text content is not retained at once.
+      const reader = page.streamTextContent().getReader();
+      text += `\n[PDF ${index}ページ]\n`;
+      let reachedLimit = text.length >= MAX_CHARS;
+      try {
+        while (!reachedLimit) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          for (const item of chunk.value.items) {
+            if (!('str' in item)) continue;
+            hasText ||= Boolean(item.str.trim());
+            const value = item.str + (item.hasEOL ? '\n' : ' ');
+            const remaining = MAX_CHARS - text.length;
+            text += value.slice(0, remaining);
+            if (value.length >= remaining) { reachedLimit = true; break; }
+          }
+        }
+      } finally {
+        if (reachedLimit) await reader.cancel();
+        reader.releaseLock();
+        page.cleanup();
+      }
+      if (reachedLimit) { truncated = true; break; }
+    }
+    if (!hasText) reply({ error: 'noText' });
+    else reply({ text: text.slice(0, MAX_CHARS), truncated });
+  } catch {
+    reply({ error: 'invalidPdf' });
+  }
+}
+
+function reply(message: object): void {
+  if (!process.connected || !process.send) { process.exit(0); return; }
+  process.send(message, () => process.exit(0));
 }
 ````
 
@@ -2383,6 +2483,92 @@ test('カスタムモデルを設定でき、不正な選択IDは拒否', async 
 });
 ````
 
+## test/pdfParser.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const childProcess = require('node:child_process');
+const { parsePdf, PDF_TIMEOUT_MS, PDF_HEAP_MB } = require('../dist/services/pdfParser');
+
+function stub(t) {
+  const child = new EventEmitter();
+  child.kills = [];
+  child.kill = signal => { child.kills.push(signal); return true; };
+  child.send = (_bytes, callback) => callback(null);
+  t.mock.method(childProcess, 'fork', (_file, _args, options) => {
+    assert.deepEqual(options.execArgv, [`--max-old-space-size=${PDF_HEAP_MB}`]);
+    assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1');
+    assert.equal(options.env.NODE_OPTIONS, undefined);
+    assert.equal(options.env.TORITSU_TEST_SECRET, undefined);
+    return child;
+  });
+  return child;
+}
+
+test('PDF結果を受け取ったら子プロセスを終了する', async t => {
+  const child = stub(t);
+  const pending = parsePdf(Buffer.from('%PDF-test'));
+  child.emit('message', { text: 'reference', truncated: false });
+  assert.deepEqual(await pending, { text: 'reference', truncated: false });
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  child.emit('exit', 0); // A late exit must not settle again.
+  assert.equal(child.kills.length, 1);
+});
+
+test('解析中のキャンセルで子プロセスを強制終了する', async t => {
+  const child = stub(t);
+  const controller = new AbortController();
+  const pending = parsePdf(Buffer.from('%PDF-test'), controller.signal);
+  controller.abort();
+  await assert.rejects(pending, /キャンセル/);
+  assert.deepEqual(child.kills, ['SIGKILL']);
+});
+
+test('応答しない子プロセスは親のタイマーで終了する', async t => {
+  const child = stub(t);
+  let deadline;
+  t.mock.method(global, 'setTimeout', (callback, ms) => {
+    assert.equal(ms, PDF_TIMEOUT_MS); deadline = callback; return 1;
+  });
+  t.mock.method(global, 'clearTimeout', () => {});
+  const pending = parsePdf(Buffer.from('%PDF-test'));
+  deadline();
+  await assert.rejects(pending, /15秒/);
+  assert.deepEqual(child.kills, ['SIGKILL']);
+});
+
+test('メモリ不足などによる子プロセスの終了をエラーとして返す', async t => {
+  const child = stub(t);
+  const pending = parsePdf(Buffer.from('%PDF-test'));
+  child.emit('exit', null, 'SIGABRT');
+  await assert.rejects(pending, /メモリ/);
+});
+
+test('キャンセル済みやサイズ超過では子プロセスを起動しない', async t => {
+  t.mock.method(childProcess, 'fork', () => { throw new Error('must not start'); });
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(parsePdf(Buffer.alloc(0), controller.signal), /キャンセル/);
+  await assert.rejects(parsePdf(Buffer.alloc(10 * 1024 * 1024 + 1)), /10MB/);
+});
+
+test('大きすぎる結果・解析失敗・起動失敗をエラーとして返す', async t => {
+  const child = stub(t);
+  let pending = parsePdf(Buffer.from('%PDF-test'));
+  child.emit('message', { text: 'a'.repeat(40001), truncated: false });
+  await assert.rejects(pending, /解析できません/);
+  child.removeAllListeners();
+  pending = parsePdf(Buffer.from('%PDF-test'));
+  child.emit('message', { error: 'noText' });
+  await assert.rejects(pending, /OCR/);
+  child.removeAllListeners();
+  pending = parsePdf(Buffer.from('%PDF-test'));
+  child.emit('error', new Error('spawn failure'));
+  await assert.rejects(pending, /起動・通信/);
+});
+````
+
 ## test/vscode.smoke.cjs
 
 ````javascript
@@ -2412,13 +2598,13 @@ exports.run = async function () {
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -5006,6 +5192,9 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 APIキー・Microsoftトークン・ブラウザのCookieをリンク先には送信しません。
 公開HTTP/HTTPSの標準ポートのみ対応し、ローカル・プライベートIPへの接続を拒否します。
 リダイレクト先も確認します。1リンクの読み込みは30秒を目安にタイムアウトし、中止ボタンで止められます。
+PDF解析は専用の子プロセスで行い、解析開始から15秒を超えた場合やキャンセル時には強制終了します。
+子プロセスのV8 old-spaceヒープは256MiBに制限し、APIキーなどの環境変数は引き継ぎません。
+この設定はプロセス全体のメモリ（RSS）を制限するものではなく、OSのセキュリティサンドボックスでもありません。
 
 リンク先の取得とAIへの送信は別の操作です。毎回確認モードでは両方で確認します。
 リンクを含む質問は、先に資料を読み込んでから送信してください。
@@ -5109,6 +5298,7 @@ Content-Type: application/json
 - `src/services/approvalService.ts`: 承認モードの保存とAPI送信・編集の確認。
 - `src/services/imageAttachments.ts`: 画像形式・容量のホスト側検証。
 - `src/services/linkReader.ts`: 公開リンクの取得、HTML・PDF本文の抽出。
+- `src/services/pdfParser.ts` / `pdfWorker.ts`: PDF解析用の子プロセス、時間制限とキャンセル。
 - `src/services/toritsuAiClient.ts`: HTTP、認証、タイムアウト、応答変換。専用API対応の変更箇所。
 - `src/services/promptBuilder.ts`: 用途ごとのプロンプト。
 - `src/services/contextCollector.ts`: 未保存内容を含むエディター情報収集。

@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import { loadBuffer } from 'cheerio';
 import * as ipaddr from 'ipaddr.js';
-import { dirname, join, sep } from 'node:path';
+import { parsePdf } from './pdfParser';
 
 export interface LinkSource {
   originalUrl: string;
@@ -88,34 +88,9 @@ export async function parseLinkContent(bytes: Buffer, contentType: string, signa
   let text = '';
   let truncated = false;
   if (bytes.subarray(0, 5).toString() === '%PDF-') {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const assets = dirname(require.resolve('pdfjs-dist/package.json'));
-    const task = pdfjs.getDocument({
-      data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true, verbosity: 0,
-      cMapUrl: join(assets, 'cmaps') + sep, cMapPacked: true,
-      standardFontDataUrl: join(assets, 'standard_fonts') + sep
-    });
-    const cancel = () => { void task.destroy().catch(() => {}); };
-    signal?.addEventListener('abort', cancel, { once: true });
-    try {
-      if (signal?.aborted) throw new Error('読み込みをキャンセルしました。');
-      const document = await task.promise;
-      for (let index = 1; index <= Math.min(document.numPages, 100); index++) {
-        if (signal?.aborted) throw new Error('読み込みをキャンセルしました。');
-        const page = await document.getPage(index);
-        const content = await page.getTextContent();
-        text += `\n[PDF ${index}ページ]\n` + content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('');
-        page.cleanup();
-        if (text.length > MAX_SOURCE_CHARS) { truncated = true; break; }
-      }
-      truncated ||= document.numPages > 100;
-      if (!text.replace(/\[PDF \d+ページ\]/g, '').trim()) {
-        throw new Error('PDFに抽出可能な文字がありません。スキャン画像のOCRには対応していません。');
-      }
-    } finally {
-      signal?.removeEventListener('abort', cancel);
-      await task.destroy();
-    }
+    const parsed = await parsePdf(bytes, signal);
+    text = parsed.text;
+    truncated = parsed.truncated;
   } else if (/text\/html|application\/xhtml\+xml/i.test(contentType)) {
     const charset = /charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType)?.[1];
     const $ = loadBuffer(bytes, { encoding: { defaultEncoding: 'utf-8', transportLayerEncodingLabel: charset } });
