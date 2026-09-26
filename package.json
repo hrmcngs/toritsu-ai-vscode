@@ -1,0 +1,62 @@
+{
+  "name": "toritsu-ai",
+  "displayName": "都立AI",
+  "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
+  "version": "0.1.0",
+  "publisher": "toritsu-ai-local",
+  "private": true,
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "contributes": {
+    "commands": [
+      { "command": "toritsuAI.setApiKey", "title": "Toritsu AI: Set API Key" },
+      { "command": "toritsuAI.explainCode", "title": "Toritsu AI: Explain Code" },
+      { "command": "toritsuAI.editSelection", "title": "Toritsu AI: Edit Selection" },
+      { "command": "toritsuAI.openChat", "title": "Toritsu AI: Open Chat" }
+    ],
+    "viewsContainers": {
+      "activitybar": [{ "id": "toritsuAI", "title": "都立AI", "icon": "media/icon.svg" }]
+    },
+    "views": {
+      "toritsuAI": [{ "type": "webview", "id": "toritsuAI.chat", "name": "都立AI Chat" }]
+    },
+    "configuration": {
+      "title": "Toritsu AI",
+      "properties": {
+        "toritsuAI.baseUrl": {
+          "type": "string", "default": "", "scope": "machine",
+          "description": "APIのルートURL。例: https://ai.example.jp（/v1はendpoint側に指定）"
+        },
+        "toritsuAI.model": {
+          "type": "string", "default": "", "scope": "machine",
+          "description": "接続先で利用できるモデルID"
+        },
+        "toritsuAI.chatEndpoint": {
+          "type": "string", "default": "/v1/chat/completions", "scope": "machine",
+          "description": "baseUrlに追加するチャットAPIパス"
+        },
+        "toritsuAI.authHeader": {
+          "type": "string", "default": "Authorization", "scope": "machine",
+          "description": "APIキーを渡すヘッダー名"
+        },
+        "toritsuAI.apiKeyPrefix": {
+          "type": "string", "default": "Bearer", "scope": "machine",
+          "description": "APIキーの接頭辞。空欄ならキーのみ。接頭辞とキーの間に空白を追加"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "vscode:prepublish": "npm run compile",
+    "test": "npm run compile && node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "1.90.0",
+    "typescript": "~5.6.3"
+  }
+}
