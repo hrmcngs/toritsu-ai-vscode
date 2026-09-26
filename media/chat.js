@@ -13,6 +13,7 @@
   function syncControls() {
     const disabled = !state.signedIn || state.busy || state.changingModel || reading;
     for (const id of ['send', 'attach', 'prompt', 'context', 'load-links']) el(id).disabled = disabled;
+    for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     for (const button of el('attachments').querySelectorAll('button')) button.disabled = state.busy || reading;
   }
   function renderImages() {
@@ -58,7 +59,70 @@
       if (generation === attachmentGeneration) el('error').textContent = error.message;
     } finally { reading = false; syncControls(); }
   }
-  el('attach').addEventListener('click', () => el('image-picker').click());
+  function closeAddMenu() { el('add-menu').hidden = true; el('attach').setAttribute('aria-expanded', 'false'); }
+  el('attach').addEventListener('click', () => {
+    closeApprovalMenu(); closeModelMenu();
+    el('add-menu').hidden = !el('add-menu').hidden;
+    el('attach').setAttribute('aria-expanded', String(!el('add-menu').hidden));
+    if (!el('add-menu').hidden) el('add-menu').querySelector('button').focus();
+  });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#attach, #add-menu')) closeAddMenu();
+  });
+  el('add-menu').addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeAddMenu(); el('attach').focus(); }
+    const buttons = [...el('add-menu').querySelectorAll('button:not(:disabled)')];
+    if (buttons.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault(); const step = event.key === 'ArrowDown' ? 1 : -1;
+      buttons[(buttons.indexOf(document.activeElement) + step + buttons.length) % buttons.length].focus();
+    }
+  });
+  for (const button of el('add-menu').querySelectorAll('[data-add]')) {
+    button.addEventListener('click', () => {
+      if (!state.signedIn || state.busy || reading) return;
+      closeAddMenu();
+      const action = button.dataset.add;
+      if (action === 'image') el('image-picker').click();
+      else if (action === 'link') el('load-links').click();
+      else if (action === 'sketch') { resetSketch(); el('sketch-dialog').showModal(); }
+      else vscode.postMessage({ type: action });
+    });
+  }
+  const canvas = el('sketch-canvas');
+  const pen = canvas.getContext('2d');
+  let drawing = false;
+  let sketchHasInk = false;
+  function resetSketch() {
+    drawing = false; sketchHasInk = false;
+    pen.fillStyle = '#ffffff'; pen.fillRect(0, 0, canvas.width, canvas.height);
+    pen.strokeStyle = '#202020'; pen.lineWidth = 4; pen.lineCap = 'round'; pen.lineJoin = 'round';
+    el('sketch-add').disabled = true;
+  }
+  const point = event => {
+    const bounds = canvas.getBoundingClientRect();
+    return [(event.clientX - bounds.left) * canvas.width / bounds.width, (event.clientY - bounds.top) * canvas.height / bounds.height];
+  };
+  canvas.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault(); drawing = true; canvas.setPointerCapture(event.pointerId);
+    const [x, y] = point(event); pen.beginPath(); pen.moveTo(x, y); pen.lineTo(x + .1, y + .1); pen.stroke();
+    sketchHasInk = true; el('sketch-add').disabled = false;
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!drawing) return;
+    const [x, y] = point(event); pen.lineTo(x, y); pen.stroke();
+  });
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => { drawing = false; });
+  el('sketch-clear').addEventListener('click', resetSketch);
+  el('sketch-close').addEventListener('click', () => el('sketch-dialog').close());
+  el('sketch-add').addEventListener('click', async () => {
+    if (!sketchHasInk || !state.signedIn || state.busy) return;
+    const generation = attachmentGeneration;
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob || generation !== attachmentGeneration || !state.signedIn || state.busy) return;
+    el('sketch-dialog').close();
+    await addFiles([new File([blob], 'スケッチ.png', { type: 'image/png' })]);
+  });
   el('load-links').addEventListener('click', () => {
     if (!state.signedIn || state.busy || state.changingModel) return;
     state.busy = true; syncControls();
@@ -86,7 +150,7 @@
     vscode.postMessage({ type: 'selectModel', id });
   }
   el('model').addEventListener('click', () => {
-    closeApprovalMenu();
+    closeAddMenu(); closeApprovalMenu();
     el('model-menu').hidden = !el('model-menu').hidden;
     el('model').setAttribute('aria-expanded', String(!el('model-menu').hidden));
     if (!el('model-menu').hidden) el('model-options').querySelector('button')?.focus();
@@ -103,7 +167,7 @@
     }
   });
   el('approval-toggle').addEventListener('click', () => {
-    closeModelMenu();
+    closeAddMenu(); closeModelMenu();
     el('approval-menu').hidden = !el('approval-menu').hidden;
     el('approval-toggle').setAttribute('aria-expanded', String(!el('approval-menu').hidden));
     if (!el('approval-menu').hidden) el('approval-menu').querySelector('[aria-checked=true]').focus();
@@ -130,9 +194,9 @@
   }
   el('form').addEventListener('submit', event => {
     event.preventDefault();
-    if (!state.signedIn || state.busy || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length)) return;
+    if (!state.signedIn || state.busy || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
     state.busy = true;
-    syncControls(); closeApprovalMenu(); closeModelMenu();
+    syncControls(); closeApprovalMenu(); closeModelMenu(); closeAddMenu();
     vscode.postMessage({ type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
   });
   prompt.addEventListener('keydown', event => {
@@ -147,6 +211,34 @@
   window.addEventListener('message', event => {
     if (event.data.type !== 'state') return;
     state = event.data;
+    if (!state.signedIn || state.busy) closeAddMenu();
+    if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
+    el('options-summary').replaceChildren();
+    el('options-summary').hidden = !state.goal && !state.planMode;
+    if (state.goal) {
+      const goal = document.createElement('button'); goal.type = 'button'; goal.className = 'option-chip';
+      goal.textContent = `目標: ${state.goal}`; goal.title = '目標を編集・解除'; goal.disabled = state.busy;
+      goal.addEventListener('click', () => vscode.postMessage({ type: 'goal' })); el('options-summary').append(goal);
+    }
+    if (state.planMode) {
+      const plan = document.createElement('button'); plan.type = 'button'; plan.className = 'option-chip';
+      plan.textContent = 'プランモード ×'; plan.disabled = state.busy;
+      plan.addEventListener('click', () => vscode.postMessage({ type: 'planMode' })); el('options-summary').append(plan);
+    }
+    el('plan-option').setAttribute('aria-checked', String(!!state.planMode));
+    el('plan-check').hidden = !state.planMode;
+    el('plan-description').textContent = state.planMode ? 'オン・クリックで解除' : '作る前に手順を相談';
+    const openFiles = new Set([...el('file-attachments').querySelectorAll('details[open]')].map(item => item.dataset.id));
+    el('file-attachments').replaceChildren();
+    for (const file of state.files ?? []) {
+      const card = document.createElement('details'); card.className = 'source-card'; card.dataset.id = file.id; card.open = openFiles.has(file.id);
+      const title = document.createElement('summary'); title.textContent = `${file.name} · ${file.text.length.toLocaleString()}文字`;
+      const path = document.createElement('p'); path.className = 'source-url'; path.textContent = file.path;
+      const content = document.createElement('pre'); content.textContent = file.text;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = '添付を外す'; remove.disabled = state.busy;
+      remove.addEventListener('click', () => vscode.postMessage({ type: 'removeFile', id: file.id }));
+      card.append(title, path, content, remove); el('file-attachments').append(card);
+    }
     const openSources = new Set([...el('sources').querySelectorAll('details[open]')].map(item => item.dataset.url));
     el('sources').replaceChildren();
     for (const source of state.sources ?? []) {
@@ -228,7 +320,7 @@
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
     el('cancel').hidden = !state.busy;
     el('send').hidden = state.busy;
-    el('status').textContent = state.busy ? (state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : '';
+    el('status').textContent = state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
     el('error').textContent = state.error;
     if (!state.signedIn || state.clearInput) { prompt.value = ''; context.checked = false; resetImages(); }
     if (state.clearInput && state.signedIn && !state.busy) prompt.focus();

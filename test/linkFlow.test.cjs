@@ -77,3 +77,18 @@ test('画面からログアウトすると会話を隠し、次の起動で履�
   const third = setup(t, async () => 'unused', storage);
   await third.provider.receive({ type: 'home' }); assert.deepEqual(third.state().recent, []);
 });
+
+test('ファイル本文と目標を送信し、本文は履歴に保存せず送信後に除く', async t => {
+  let request;
+  const { provider, state } = setup(t, async messages => { request = messages; return '回答'; });
+  provider.files = [{ id: 'one', name: 'main.ts', path: '/main.ts', text: 'PRIVATE_FILE_BODY' }];
+  provider.goal = '目標'; provider.planMode = true;
+  await provider.receive({ type: 'send', text: '計画して' });
+  assert.equal(JSON.parse(request.at(-1).content).files[0].text, 'PRIVATE_FILE_BODY');
+  assert.equal(JSON.parse(request.at(-1).content).goal, '目標');
+  assert.deepEqual(state().files, []);
+  assert.doesNotMatch(JSON.stringify(state().messages), /PRIVATE_FILE_BODY/);
+  assert.match(state().messages[0].content, /main.ts/);
+  await provider.receive({ type: 'new' });
+  assert.equal(state().goal, ''); assert.equal(state().planMode, false);
+});

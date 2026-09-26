@@ -4,6 +4,7 @@ import { collectContext } from '../services/contextCollector';
 import { chatPrompt } from '../services/promptBuilder';
 import { errorMessage } from '../utils/runRequest';
 import { AuthService } from '../services/authService';
+import { collectAttachments, MAX_FILES, MAX_FILE_CHARS, TextAttachment } from '../services/fileAttachments';
 import { ChatHistory } from '../services/chatHistory';
 import { chatHtml } from './chatHtml';
 import { ApprovalService } from '../services/approvalService';
@@ -22,6 +23,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private readonly linkReader = new LinkReader();
   private sources: LinkSource[] = [];
   private loadingLinks = false;
+  private loadingFiles = false;
+  private files: TextAttachment[] = [];
+  private goal = '';
+  private planMode = false;
+  private notice = '';
   private editor = vscode.window.activeTextEditor;
   private readonly subscriptions: vscode.Disposable[] = [];
   private viewSubscriptions: vscode.Disposable[] = [];
@@ -45,7 +51,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.controller?.abort();
         this.history.setAccount(auth.session?.accountId);
         this.showingHistory = false;
-        this.sources = [];
+        this.goal = ''; this.planMode = false;
+        this.sources = []; this.files = []; this.notice = '';
         this.error = '';
         this.publish(true);
       })
@@ -76,6 +83,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       approvalMode: this.approvals.mode,
       modelSelection: this.models.state, changingModel: this.changingModel,
       sources: session ? this.sources : [], loadingLinks: this.loadingLinks,
+      files: session ? this.files : [], loadingFiles: this.loadingFiles,
+      goal: session ? this.goal : '', planMode: this.planMode, notice: this.notice,
       error: this.error, clearInput
     });
   }
@@ -116,6 +125,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return;
       }
       if (this.controller) return;
+      if (message.type === 'attachFiles' || message.type === 'attachFolder') {
+        const session = await this.auth.requireSession();
+        if (this.controller || this.changingModel) return;
+        const controller = new AbortController(); this.controller = controller;
+        this.loadingFiles = true; this.error = ''; this.notice = ''; this.publish();
+        try {
+          const folder = message.type === 'attachFolder';
+          const selected = await vscode.window.showOpenDialog({
+            title: folder ? '参考にするフォルダーを選択' : '参考にするファイルを選択',
+            openLabel: '添付する', canSelectFiles: !folder, canSelectFolders: folder, canSelectMany: !folder
+          });
+          if (!selected?.length || controller.signal.aborted || this.auth.session?.key !== session.key) return;
+          if (selected.some(uri => uri.scheme !== 'file')) throw new Error('ローカルのファイル・フォルダーを選択してください。');
+          const result = await collectAttachments(selected.map(uri => uri.fsPath), controller.signal);
+          if (controller.signal.aborted || this.auth.session?.key !== session.key) return;
+          const additions = result.files.filter(file => !this.files.some(existing => existing.path === file.path));
+          const all = [...this.files, ...additions];
+          if (all.length > MAX_FILES || all.reduce((sum, file) => sum + file.text.length, 0) > MAX_FILE_CHARS) {
+            throw new Error('ファイル添付は20件・合計8万文字までです。不要な添付を削除してください。');
+          }
+          this.files = all;
+          this.notice = `${additions.length}件のファイルを添付しました。${result.skipped ? '容量超過・対象外のファイルやフォルダーは省略しました。' : ''}`;
+        } finally { this.controller = undefined; this.loadingFiles = false; }
+        return;
+      }
+      if (message.type === 'removeFile' && typeof message.id === 'string') {
+        this.files = this.files.filter(file => file.id !== message.id); this.notice = ''; return;
+      }
+      if (message.type === 'planMode') {
+        await this.auth.requireSession();
+        if (!this.controller) this.planMode = !this.planMode;
+        return;
+      }
+      if (message.type === 'goal') {
+        const session = await this.auth.requireSession();
+        const value = await vscode.window.showInputBox({ title: 'この会話の目標',
+          prompt: '送信するたびにAIへ伝える目標です。空欄にすると解除します。', value: this.goal,
+          ignoreFocusOut: true, validateInput: value => value.length > 2000 ? '目標は2000文字以内で入力してください。' : undefined });
+        if (value !== undefined && value.length <= 2000 && !this.controller && this.auth.session?.key === session.key) this.goal = value.trim();
+        return;
+      }
       if (message.type === 'loadLinks') {
         const session = await this.auth.requireSession();
         if (this.controller || this.changingModel) return;
@@ -149,8 +199,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
       if (message.type === 'home') { this.showHistory(); return; }
       if (message.type === 'new') {
+        this.goal = ''; this.planMode = false;
         this.showingHistory = false;
-        this.sources = [];
+        this.sources = []; this.files = []; this.notice = '';
         this.history.startNew(); this.error = ''; this.publish(true); return;
       }
       if (message.type === 'clear' || message.type === 'delete') {
@@ -164,12 +215,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
         else this.history.remove(id!);
-        this.sources = []; this.error = ''; this.publish(true);
+        this.sources = []; this.files = []; this.notice = ''; this.error = ''; this.publish(true);
         await this.history.save();
         return;
       }
       if (message.type === 'select' && typeof message.id === 'string') {
-        this.sources = [];
+        this.goal = ''; this.planMode = false;
+        this.sources = []; this.files = []; this.notice = '';
         if (!this.auth.session) return;
         this.showingHistory = false;
         this.history.select(message.id); this.error = ''; this.publish(true); return;
@@ -177,7 +229,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (message.type !== 'send' || typeof message.text !== 'string') return;
       if (this.changingModel) return;
       const images = validateImages(message.images);
-      const text = message.text.trim() || (images.length ? '添付画像について説明してください。' : this.sources.length ? '参考資料を基に要点をまとめてください。' : '');
+      const text = message.text.trim() || (images.length ? '添付画像について説明してください。' : (this.sources.length || this.files.length) ? '参考資料を基に要点をまとめてください。' : '');
       if (!text) return;
       const missing = extractLinks(text).filter(url => !this.sources.some(source => source.originalUrl === url || source.url === url));
       if (missing.length) throw new Error('先に「リンクを読み込む」を押し、参考資料の内容を確認してください。');
@@ -193,15 +245,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           throw new Error('全文を送るファイルをエディターで開いてください。');
         }
         const context = message.includeContext === true && editor ? collectContext(editor) : undefined;
-        const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources), controller.signal);
+        const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode }), controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
           throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
         }
         const historyText = images.length ? `${text}\n\n[添付画像: ${images.map(image => image.name).join(', ')}。画像本体はこの送信のみに含まれます]` : text;
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';
         this.showingHistory = false;
-        this.history.append(historyText + sourceNote, answer);
-        this.sources = [];
+        const fileNote = this.files.length ? `\n\n[添付ファイル: ${this.files.map(file => file.name).join(', ')}。本文はこの送信のみ]` : '';
+        const optionsNote = `${this.goal ? `\n[目標: ${this.goal}]` : ''}${this.planMode ? '\n[プランモード]' : ''}`;
+        this.history.append(historyText + sourceNote + fileNote + optionsNote, answer);
+        this.sources = []; this.files = []; this.notice = '';
         this.publish(true);
         await this.history.save();
       } finally { this.controller = undefined; }
@@ -212,8 +266,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   showHistory(): void {
     if (!this.auth.session || this.controller) return;
-    this.sources = [];
+    this.sources = []; this.files = []; this.notice = '';
     this.history.startNew();
+    this.goal = ''; this.planMode = false;
     this.showingHistory = true;
     this.publish(true);
   }

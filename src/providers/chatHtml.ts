@@ -29,13 +29,27 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 </main>
 <footer><p id="status" role="status"></p><p id="error" role="alert"></p>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
+<div id="options-summary" class="options-summary" hidden></div>
+<div id="file-attachments" aria-label="添付ファイル"></div>
 <div id="sources" aria-label="参考リンク"></div>
 <div id="attachments" aria-label="添付画像"></div>
 <p id="image-help" class="attachment-hint" hidden>画像対応モデルが必要です。画像本体は今回の送信だけに含まれます。</p>
 <textarea id="prompt" rows="3" placeholder="都立AIに相談する…（画像をドロップできます）" disabled></textarea>
 <input id="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
 <div class="composer-bottom"><div class="composer-actions">
-<button id="attach" type="button" class="icon-button" title="画像を添付" aria-label="画像を添付" disabled>${icon('M12 5v14M5 12h14')}</button>
+<button id="attach" type="button" class="icon-button" title="追加メニュー" aria-label="追加メニュー" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu" disabled>${icon('M12 5v14M5 12h14')}</button>
+<div id="add-menu" class="add-menu" role="menu" aria-label="追加" hidden>
+<p class="add-heading">追加</p>
+<button type="button" role="menuitem" data-add="attachFiles">${icon('M8 12v5a4 4 0 0 0 8 0V7a3 3 0 0 0-6 0v10a1 1 0 0 0 2 0V8')}<span>ファイル<small>コードや資料を添付</small></span></button>
+<button type="button" role="menuitem" data-add="attachFolder">${icon('M3 6h7l2 3h9v11H3Z')}<span>フォルダー<small>中のテキストをまとめて添付</small></span></button>
+<button type="button" role="menuitem" data-add="image">${icon('M3 3h18v18H3ZM3 17l5-5 4 4 4-6 5 7M8 7h.01')}<span>画像<small>画像を選択・ドロップ</small></span></button>
+<button type="button" role="menuitem" data-add="link">${icon('M10 14l4-4M8 16l-2 2a4 4 0 0 1-5-5l4-4a4 4 0 0 1 5 0m4-1 2-2a4 4 0 0 1 5 5l-4 4a4 4 0 0 1-5 0')}<span>リンク<small>WebページやPDFを読み込む</small></span></button>
+<button type="button" role="menuitem" data-add="goal">${icon('M21 12a9 9 0 1 1-9-9M17 12a5 5 0 1 1-5-5m0 5 9-9m-5 0h5v5')}<span>目標<small>この会話で達成したいこと</small></span></button>
+<button id="plan-option" type="button" role="menuitemcheckbox" aria-checked="false" data-add="planMode">${icon('M9 18h6m-5 3h4M8 15a7 7 0 1 1 8 0l-1 3H9Z')}<span>プランモード<small id="plan-description">作る前に手順を相談</small></span><span id="plan-check" hidden>✓</span></button>
+<button type="button" role="menuitem" data-add="sketch">${icon('M4 17 16 5l3 3L7 20H4Zm10-10 3 3M11 20h9')}<span>スケッチ<small>描いたイメージを添付</small></span></button>
+<p class="add-heading">接続</p>
+<button type="button" role="menuitem" data-add="settings">${icon('M4 7h16M4 17h16M8 4v6m8 4v6')}<span>都立AIの接続設定<small>API・モデル・キーを設定</small></span></button>
+</div>
 <button id="load-links" type="button" class="text-button" title="入力したURL、または指定したURLのWebページ・PDFを読み込む" disabled>リンクを読み込む</button>
 <div class="approval-control"><button id="approval-toggle" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="approval-menu"><span id="approval-label">自動承認</span> ⌄</button>
 <div id="approval-menu" class="approval-menu" role="menu" aria-label="操作の承認設定" hidden>
@@ -56,5 +70,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="cancel" type="button" class="icon-button" title="生成を中止" aria-label="生成を中止" hidden>${icon('M6 6h12v12H6Z')}</button>
 <button id="send" type="submit" class="send-button" title="送信（⌘ / Ctrl + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
 <p class="footnote">都立AI · 生成された内容は確認してから使用してください</p></footer>
-</div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+</div>
+<dialog id="sketch-dialog" aria-labelledby="sketch-title"><h2 id="sketch-title">スケッチ</h2><p class="muted">図や画面のイメージを描いてください。</p><canvas id="sketch-canvas" width="1000" height="620" aria-label="スケッチの描画領域"></canvas><div class="sketch-actions"><button id="sketch-clear" class="text-button" type="button">描き直す</button><button id="sketch-close" class="text-button" type="button">キャンセル</button><button id="sketch-add" class="primary" type="button" disabled>画像として添付</button></div></dialog>
+<script nonce="${nonce}" src="${script}"></script></body></html>`;
 }
