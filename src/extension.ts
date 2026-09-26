@@ -27,7 +27,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, () => context.secrets.get(API_KEY_SECRET));
   const approvals = new ApprovalService();
   const client: LlmClient = new AuthenticatedClient(auth, new ApprovedClient(approvals, transport));
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals);
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState);
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await openChat(); throw error; }
@@ -45,6 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       });
     })],
+    ['toritsuAI.showHistory', () => authorized(async () => { await openChat(); chat.showHistory(); })],
     ['toritsuAI.signIn', () => auth.signIn()],
     ['toritsuAI.signOut', () => auth.signOut()],
     ['toritsuAI.openChat', openChat]

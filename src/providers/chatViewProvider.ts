@@ -13,7 +13,8 @@ import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/l
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView;
-  private readonly history = new ChatHistory();
+  private readonly history: ChatHistory;
+  private showingHistory = false;
   private controller?: AbortController;
   private signingIn = false;
   private changingModel = false;
@@ -30,8 +31,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly extensionUri: vscode.Uri,
     private readonly client: LlmClient,
     private readonly auth: AuthService,
-    private readonly approvals: ApprovalService
+    private readonly approvals: ApprovalService,
+    storage?: vscode.Memento
   ) {
+    this.history = new ChatHistory(storage);
+    this.history.setAccount(auth.session?.accountId);
     this.subscriptions.push(
       vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) this.editor = editor; }),
       vscode.workspace.onDidChangeConfiguration(event => {
@@ -39,7 +43,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }),
       auth.onDidChange(() => {
         this.controller?.abort();
-        this.history.clear();
+        this.history.setAccount(auth.session?.accountId);
+        this.showingHistory = false;
         this.sources = [];
         this.error = '';
         this.publish(true);
@@ -64,6 +69,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     void this.view?.webview.postMessage({
       type: 'state', messages: session ? this.history.messages : [],
       recent: session ? this.history.recent : [],
+      showingHistory: this.showingHistory, activeChatId: this.history.selectedId,
       busy: !!this.controller, signingIn: this.signingIn,
       signedIn: !!session, account: session?.accountLabel ?? '',
       model: vscode.workspace.getConfiguration('toritsuAI').get<string>('model', ''),
@@ -141,13 +147,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (message.type === 'removeSource' && typeof message.id === 'string') {
         this.sources = this.sources.filter(source => source.originalUrl !== message.id); return;
       }
-      if (message.type === 'new' || message.type === 'home') {
+      if (message.type === 'home') { this.showHistory(); return; }
+      if (message.type === 'new') {
+        this.showingHistory = false;
         this.sources = [];
         this.history.startNew(); this.error = ''; this.publish(true); return;
       }
-      if (message.type === 'clear') { this.history.clear(); this.sources = []; this.error = ''; return; }
+      if (message.type === 'clear' || message.type === 'delete') {
+        const session = await this.auth.requireSession();
+        if (this.controller) return;
+        const id = typeof message.id === 'string' ? message.id : undefined;
+        if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
+        const confirmed = await vscode.window.showWarningMessage(
+          message.type === 'clear' ? 'このアカウントの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
+        if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
+        if (message.type === 'clear') this.history.clear();
+        else this.history.remove(id!);
+        this.sources = []; this.error = ''; this.publish(true);
+        await this.history.save();
+        return;
+      }
       if (message.type === 'select' && typeof message.id === 'string') {
         this.sources = [];
+        if (!this.auth.session) return;
+        this.showingHistory = false;
         this.history.select(message.id); this.error = ''; this.publish(true); return;
       }
       if (message.type !== 'send' || typeof message.text !== 'string') return;
@@ -175,13 +199,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
         const historyText = images.length ? `${text}\n\n[添付画像: ${images.map(image => image.name).join(', ')}。画像本体はこの送信のみに含まれます]` : text;
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';
+        this.showingHistory = false;
         this.history.append(historyText + sourceNote, answer);
         this.sources = [];
         this.publish(true);
+        await this.history.save();
       } finally { this.controller = undefined; }
     } catch (error) {
       this.error = errorMessage(error);
     } finally { this.publish(); }
+  }
+
+  showHistory(): void {
+    if (!this.auth.session || this.controller) return;
+    this.sources = [];
+    this.history.startNew();
+    this.showingHistory = true;
+    this.publish(true);
   }
 
   dispose(): void {

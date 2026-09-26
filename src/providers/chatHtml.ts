@@ -13,14 +13,15 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${style}"><title>都立AI</title></head>
 <body><div class="app">
-<header class="toolbar"><button id="home" class="text-button" title="チャット履歴">Chats</button>
-<div class="tools"><span id="account" class="muted"></span>
+<header class="toolbar"><button id="home" class="text-button" title="保存したチャット履歴を開く">履歴</button>
+<div class="tools">
 <button id="settings" class="icon-button" title="都立AIの接続設定" aria-label="都立AIの接続設定">${icon('M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z')}</button>
 <button id="new" class="icon-button" title="新しいチャット" aria-label="新しいチャット">${icon('M14 4H5v15h15v-9M13 11l7-8 2 2-7 8-4 1 2-3Z')}</button>
-<button id="logout" class="text-button" hidden>ログアウト</button></div></header>
+</div></header>
+<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="都立AIからログアウト">ログアウト</button></div>
 <main id="content">
-<section id="recent" aria-label="最近のチャット" hidden><div id="recent-list"></div>
-<button id="clear" class="text-button muted">履歴を消去</button></section>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のアカウントの履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
 <h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">Microsoftアカウントでログインして、コードの相談を始めましょう。</p>
 <button id="login" class="primary">Microsoftでログイン</button></section>

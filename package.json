@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -51,6 +51,10 @@
       {
         "command": "toritsuAI.signOut",
         "title": "Toritsu AI: Sign Out"
+      },
+      {
+        "command": "toritsuAI.showHistory",
+        "title": "Toritsu AI: Show History"
       }
     ],
     "menus": {

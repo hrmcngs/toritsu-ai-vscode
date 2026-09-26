@@ -187,12 +187,13 @@
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
     el('login').textContent = state.signingIn ? 'ログインを待っています…' : 'Microsoftでログイン';
-    el('logout').hidden = !state.signedIn;
+    el('account-bar').hidden = !state.signedIn;
     el('welcome-title').textContent = state.signedIn ? '何から始めましょうか？' : '都立AIへようこそ';
     el('welcome-description').textContent = state.signedIn
       ? 'コードの説明、改善の相談、アイデアをここから。'
       : 'Microsoftアカウントでログインして、コードの相談を始めましょう。';
-    el('welcome').hidden = state.messages.length > 0;
+    el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
+    el('messages').hidden = state.showingHistory;
     el('messages').replaceChildren();
     for (const message of state.messages) {
       const article = document.createElement('article');
@@ -204,16 +205,24 @@
       article.append(label, content);
       el('messages').append(article);
     }
-    el('recent').hidden = !state.signedIn || state.messages.length > 0 || !state.recent.length;
+    el('recent').hidden = !state.signedIn || (!state.showingHistory && (state.messages.length > 0 || !state.recent.length));
+    el('history-empty').hidden = state.recent.length > 0;
+    el('clear').hidden = !state.recent.length;
     el('recent-list').replaceChildren();
     for (const chat of state.recent) {
+      const row = document.createElement('div'); row.className = 'history-row';
       const button = document.createElement('button');
+      button.setAttribute('aria-current', String(chat.id === state.activeChatId));
       button.className = 'recent-item'; button.disabled = state.busy;
       const title = document.createElement('span'); title.className = 'recent-title'; title.textContent = chat.title;
       const time = document.createElement('span'); time.className = 'recent-time'; time.textContent = age(chat.updatedAt);
       button.append(title, time);
       button.addEventListener('click', () => vscode.postMessage({ type: 'select', id: chat.id }));
-      el('recent-list').append(button);
+      const remove = document.createElement('button'); remove.className = 'text-button history-delete';
+      remove.textContent = '削除'; remove.disabled = state.busy;
+      remove.setAttribute('aria-label', `${chat.title}を削除`);
+      remove.addEventListener('click', () => vscode.postMessage({ type: 'delete', id: chat.id }));
+      row.append(button, remove); el('recent-list').append(row);
     }
     syncControls();
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;

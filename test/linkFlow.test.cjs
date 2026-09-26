@@ -5,7 +5,7 @@ const original = Module._load;
 const noop = () => ({ dispose() {} });
 Module._load = function (name, ...args) {
   if (name === 'vscode') return {
-    window: { onDidChangeActiveTextEditor: noop },
+    window: { onDidChangeActiveTextEditor: noop, showWarningMessage: async () => '削除する' },
     workspace: { onDidChangeConfiguration: noop, getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
   };
   return original.call(this, name, ...args);
@@ -14,16 +14,17 @@ const { ChatViewProvider } = require('../dist/providers/chatViewProvider');
 Module._load = original;
 const source = { originalUrl: 'https://example.com/spec', url: 'https://example.com/spec', title: '仕様', text: '画面には保存ボタンが必要です。', truncated: false };
 
-function setup(t, complete) {
+function setup(t, complete, storage) {
   let listener;
-  const auth = { session: { key: 'account', accountLabel: 'test' }, onDidChange: callback => { listener = callback; return { dispose() {} }; }, requireSession: async () => {
+  const auth = { session: { key: 'account', accountId: 'a', accountLabel: 'test' }, onDidChange: callback => { listener = callback; return { dispose() {} }; }, requireSession: async () => {
     if (!auth.session) throw new Error('ログインが必要'); return auth.session;
   } };
-  const provider = new ChatViewProvider({}, { complete }, auth, { mode: 'auto', approveLinks: async () => {} });
+  const provider = new ChatViewProvider({}, { complete }, auth, { mode: 'auto', approveLinks: async () => {} }, storage);
   provider.linkReader.read = async () => source;
   let state;
   provider.view = { webview: { postMessage: value => { state = value; return Promise.resolve(true); } } };
   t.after(() => provider.dispose());
+  auth.signOut = async () => { auth.session = undefined; listener(); };
   return { provider, state: () => state, logout: () => { auth.session = undefined; listener(); } };
 }
 
@@ -55,4 +56,24 @@ test('ログアウト中に完了した読込結果は破棄', async t => {
   while (!finish) await new Promise(resolve => setImmediate(resolve));
   logout(); finish(source); await pending;
   assert.deepEqual(state().sources, []); assert.equal(state().signedIn, false);
+});
+
+
+test('画面からログアウトすると会話を隠し、次の起動で履歴から再開できる', async t => {
+  const data = new Map(); const storage = { get: key => data.get(key), update: async (key, value) => data.set(key, structuredClone(value)) };
+  const first = setup(t, async () => '回答', storage);
+  await first.provider.receive({ type: 'send', text: '保存したい質問' });
+  const id = first.state().recent[0].id;
+  await first.provider.receive({ type: 'logout' });
+  assert.equal(first.state().signedIn, false);
+  assert.deepEqual(first.state().messages, []); assert.deepEqual(first.state().recent, []);
+  const second = setup(t, async () => '続き', storage);
+  await second.provider.receive({ type: 'home' });
+  assert.equal(second.state().showingHistory, true); assert.equal(second.state().recent[0].id, id);
+  await second.provider.receive({ type: 'select', id });
+  assert.equal(second.state().showingHistory, false); assert.equal(second.state().messages[0].content, '保存したい質問');
+  await second.provider.receive({ type: 'delete', id });
+  assert.deepEqual(second.state().recent, []);
+  const third = setup(t, async () => 'unused', storage);
+  await third.provider.receive({ type: 'home' }); assert.deepEqual(third.state().recent, []);
 });

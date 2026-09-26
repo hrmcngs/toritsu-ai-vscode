@@ -9,7 +9,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -58,6 +58,10 @@
       {
         "command": "toritsuAI.signOut",
         "title": "Toritsu AI: Sign Out"
+      },
+      {
+        "command": "toritsuAI.showHistory",
+        "title": "Toritsu AI: Show History"
       }
     ],
     "menus": {
@@ -375,7 +379,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, () => context.secrets.get(API_KEY_SECRET));
   const approvals = new ApprovalService();
   const client: LlmClient = new AuthenticatedClient(auth, new ApprovedClient(approvals, transport));
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals);
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState);
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await openChat(); throw error; }
@@ -393,6 +397,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       });
     })],
+    ['toritsuAI.showHistory', () => authorized(async () => { await openChat(); chat.showHistory(); })],
     ['toritsuAI.signIn', () => auth.signIn()],
     ['toritsuAI.signOut', () => auth.signOut()],
     ['toritsuAI.openChat', openChat]
@@ -425,14 +430,15 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${style}"><title>都立AI</title></head>
 <body><div class="app">
-<header class="toolbar"><button id="home" class="text-button" title="チャット履歴">Chats</button>
-<div class="tools"><span id="account" class="muted"></span>
+<header class="toolbar"><button id="home" class="text-button" title="保存したチャット履歴を開く">履歴</button>
+<div class="tools">
 <button id="settings" class="icon-button" title="都立AIの接続設定" aria-label="都立AIの接続設定">${icon('M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z')}</button>
 <button id="new" class="icon-button" title="新しいチャット" aria-label="新しいチャット">${icon('M14 4H5v15h15v-9M13 11l7-8 2 2-7 8-4 1 2-3Z')}</button>
-<button id="logout" class="text-button" hidden>ログアウト</button></div></header>
+</div></header>
+<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="都立AIからログアウト">ログアウト</button></div>
 <main id="content">
-<section id="recent" aria-label="最近のチャット" hidden><div id="recent-list"></div>
-<button id="clear" class="text-button muted">履歴を消去</button></section>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のアカウントの履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
 <h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">Microsoftアカウントでログインして、コードの相談を始めましょう。</p>
 <button id="login" class="primary">Microsoftでログイン</button></section>
@@ -489,7 +495,8 @@ import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/l
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView;
-  private readonly history = new ChatHistory();
+  private readonly history: ChatHistory;
+  private showingHistory = false;
   private controller?: AbortController;
   private signingIn = false;
   private changingModel = false;
@@ -506,8 +513,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly extensionUri: vscode.Uri,
     private readonly client: LlmClient,
     private readonly auth: AuthService,
-    private readonly approvals: ApprovalService
+    private readonly approvals: ApprovalService,
+    storage?: vscode.Memento
   ) {
+    this.history = new ChatHistory(storage);
+    this.history.setAccount(auth.session?.accountId);
     this.subscriptions.push(
       vscode.window.onDidChangeActiveTextEditor(editor => { if (editor) this.editor = editor; }),
       vscode.workspace.onDidChangeConfiguration(event => {
@@ -515,7 +525,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }),
       auth.onDidChange(() => {
         this.controller?.abort();
-        this.history.clear();
+        this.history.setAccount(auth.session?.accountId);
+        this.showingHistory = false;
         this.sources = [];
         this.error = '';
         this.publish(true);
@@ -540,6 +551,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     void this.view?.webview.postMessage({
       type: 'state', messages: session ? this.history.messages : [],
       recent: session ? this.history.recent : [],
+      showingHistory: this.showingHistory, activeChatId: this.history.selectedId,
       busy: !!this.controller, signingIn: this.signingIn,
       signedIn: !!session, account: session?.accountLabel ?? '',
       model: vscode.workspace.getConfiguration('toritsuAI').get<string>('model', ''),
@@ -617,13 +629,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (message.type === 'removeSource' && typeof message.id === 'string') {
         this.sources = this.sources.filter(source => source.originalUrl !== message.id); return;
       }
-      if (message.type === 'new' || message.type === 'home') {
+      if (message.type === 'home') { this.showHistory(); return; }
+      if (message.type === 'new') {
+        this.showingHistory = false;
         this.sources = [];
         this.history.startNew(); this.error = ''; this.publish(true); return;
       }
-      if (message.type === 'clear') { this.history.clear(); this.sources = []; this.error = ''; return; }
+      if (message.type === 'clear' || message.type === 'delete') {
+        const session = await this.auth.requireSession();
+        if (this.controller) return;
+        const id = typeof message.id === 'string' ? message.id : undefined;
+        if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
+        const confirmed = await vscode.window.showWarningMessage(
+          message.type === 'clear' ? 'このアカウントの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
+        if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
+        if (message.type === 'clear') this.history.clear();
+        else this.history.remove(id!);
+        this.sources = []; this.error = ''; this.publish(true);
+        await this.history.save();
+        return;
+      }
       if (message.type === 'select' && typeof message.id === 'string') {
         this.sources = [];
+        if (!this.auth.session) return;
+        this.showingHistory = false;
         this.history.select(message.id); this.error = ''; this.publish(true); return;
       }
       if (message.type !== 'send' || typeof message.text !== 'string') return;
@@ -651,13 +681,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
         const historyText = images.length ? `${text}\n\n[添付画像: ${images.map(image => image.name).join(', ')}。画像本体はこの送信のみに含まれます]` : text;
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';
+        this.showingHistory = false;
         this.history.append(historyText + sourceNote, answer);
         this.sources = [];
         this.publish(true);
+        await this.history.save();
       } finally { this.controller = undefined; }
     } catch (error) {
       this.error = errorMessage(error);
     } finally { this.publish(); }
+  }
+
+  showHistory(): void {
+    if (!this.auth.session || this.controller) return;
+    this.sources = [];
+    this.history.startNew();
+    this.showingHistory = true;
+    this.publish(true);
   }
 
   dispose(): void {
@@ -753,7 +793,7 @@ import * as vscode from 'vscode';
 const ACCOUNT_KEY = 'toritsuAI.signedInAccount';
 const SCOPES = ['User.Read'];
 
-export interface LoginSession { key: string; accountLabel: string }
+export interface LoginSession { key: string; accountId: string; accountLabel: string }
 
 export interface Authentication {
   readonly session: LoginSession | undefined;
@@ -781,7 +821,7 @@ export class AuthService implements Authentication, vscode.Disposable {
   private update(session?: vscode.AuthenticationSession): void {
     const key = session ? `${session.account.id}:${session.id}` : undefined;
     if (key === this.current?.key) return;
-    this.current = session ? { key: key!, accountLabel: session.account.label } : undefined;
+    this.current = session ? { key: key!, accountId: session.account.id, accountLabel: session.account.label } : undefined;
     this.changed.fire(this.current);
   }
 
@@ -864,7 +904,8 @@ export class AuthenticatedClient implements LlmClient {
 ## src/services/chatHistory.ts
 
 ````typescript
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { Memento } from 'vscode';
 import { Message } from '../types/ai';
 
 interface Conversation {
@@ -877,6 +918,49 @@ interface Conversation {
 export class ChatHistory {
   private conversations: Conversation[] = [];
   private activeId?: string;
+  private storageKey?: string;
+  private pending: Promise<void> = Promise.resolve();
+  private readonly pendingSnapshots = new Map<string, unknown>();
+
+  constructor(private readonly storage?: Memento) {}
+
+  get selectedId(): string | undefined { return this.activeId; }
+
+  setAccount(accountId?: string): void {
+    this.clear();
+    this.storageKey = accountId ? `toritsuAI.history.v1.${createHash('sha256').update(accountId).digest('hex')}` : undefined;
+    if (!this.storageKey || !this.storage) return;
+    const raw = this.pendingSnapshots.get(this.storageKey) ?? this.storage.get<unknown>(this.storageKey);
+    if (!Array.isArray(raw)) return;
+    for (const item of raw.slice(0, 10)) {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || item.id.length > 100
+        || typeof item.title !== 'string' || !Number.isFinite(item.updatedAt) || !Array.isArray(item.messages)) continue;
+      const messages: Message[] = [];
+      for (const message of item.messages.slice(-20)) {
+        if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') continue;
+        messages.push({ role: message.role, content: message.content.slice(0, 20000) });
+      }
+      if (messages.length && !this.conversations.some(chat => chat.id === item.id)) {
+        this.conversations.push({ id: item.id, title: item.title.slice(0, 80), updatedAt: item.updatedAt, messages });
+      }
+    }
+    this.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async save(): Promise<void> {
+    const key = this.storageKey;
+    if (!key || !this.storage) return;
+    // Capture the account and snapshot before awaiting; logout cannot retarget a write.
+    const snapshot = JSON.parse(JSON.stringify(this.conversations));
+    this.pendingSnapshots.set(key, snapshot);
+    const write = this.pending.then(() => this.storage!.update(key, snapshot));
+    this.pending = write.catch(() => {});
+    try {
+      await write;
+      if (this.pendingSnapshots.get(key) === snapshot) this.pendingSnapshots.delete(key);
+    }
+    catch { throw new Error('履歴を端末に保存できませんでした。現在の会話は画面に残っています。'); }
+  }
 
   get messages(): readonly Message[] {
     return this.conversations.find(chat => chat.id === this.activeId)?.messages ?? [];
@@ -898,13 +982,19 @@ export class ChatHistory {
       chat = { id: randomUUID(), title: question.replace(/\s+/g, ' ').slice(0, 80), updatedAt: Date.now(), messages: [] };
       this.activeId = chat.id;
     }
-    chat.messages.push({ role: 'user', content: question }, { role: 'assistant', content: answer });
+    const bounded = (text: string) => text.length <= 20000 ? text : text.slice(0, 19985) + '\n[履歴の文字数上限で省略]';
+    chat.messages.push({ role: 'user', content: bounded(question) }, { role: 'assistant', content: bounded(answer) });
     chat.messages = chat.messages.slice(-20);
     chat.updatedAt = Date.now();
     this.conversations = [chat, ...this.conversations.filter(item => item.id !== chat.id)].slice(0, 10);
   }
 
   clear(): void { this.conversations = []; this.activeId = undefined; }
+
+  remove(id: string): void {
+    this.conversations = this.conversations.filter(chat => chat.id !== id);
+    if (this.activeId === id) this.activeId = undefined;
+  }
 }
 ````
 
@@ -1557,6 +1647,16 @@ button:disabled { opacity: .4; cursor: default; }
 .source-url { font-size: 10px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 #load-links { font-size: 11px; }
 .composer-actions { flex-wrap: wrap; }
+
+.account-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.account-bar #account { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+#logout { flex-shrink: 0; color: var(--vscode-foreground); }
+#recent h2 { font-size: 15px; font-weight: 500; }
+.history-note { font-size: 11px; line-height: 1.6; }
+.history-row { display: flex; align-items: center; gap: 4px; }
+.history-row .recent-item { min-width: 0; flex: 1; }
+.history-delete { flex-shrink: 0; font-size: 11px; }
+.recent-item[aria-current=true] { background: var(--vscode-list-inactiveSelectionBackground); }
 ````
 
 ## media/chat.js
@@ -1751,12 +1851,13 @@ button:disabled { opacity: .4; cursor: default; }
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
     el('login').textContent = state.signingIn ? 'ログインを待っています…' : 'Microsoftでログイン';
-    el('logout').hidden = !state.signedIn;
+    el('account-bar').hidden = !state.signedIn;
     el('welcome-title').textContent = state.signedIn ? '何から始めましょうか？' : '都立AIへようこそ';
     el('welcome-description').textContent = state.signedIn
       ? 'コードの説明、改善の相談、アイデアをここから。'
       : 'Microsoftアカウントでログインして、コードの相談を始めましょう。';
-    el('welcome').hidden = state.messages.length > 0;
+    el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
+    el('messages').hidden = state.showingHistory;
     el('messages').replaceChildren();
     for (const message of state.messages) {
       const article = document.createElement('article');
@@ -1768,16 +1869,24 @@ button:disabled { opacity: .4; cursor: default; }
       article.append(label, content);
       el('messages').append(article);
     }
-    el('recent').hidden = !state.signedIn || state.messages.length > 0 || !state.recent.length;
+    el('recent').hidden = !state.signedIn || (!state.showingHistory && (state.messages.length > 0 || !state.recent.length));
+    el('history-empty').hidden = state.recent.length > 0;
+    el('clear').hidden = !state.recent.length;
     el('recent-list').replaceChildren();
     for (const chat of state.recent) {
+      const row = document.createElement('div'); row.className = 'history-row';
       const button = document.createElement('button');
+      button.setAttribute('aria-current', String(chat.id === state.activeChatId));
       button.className = 'recent-item'; button.disabled = state.busy;
       const title = document.createElement('span'); title.className = 'recent-title'; title.textContent = chat.title;
       const time = document.createElement('span'); time.className = 'recent-time'; time.textContent = age(chat.updatedAt);
       button.append(title, time);
       button.addEventListener('click', () => vscode.postMessage({ type: 'select', id: chat.id }));
-      el('recent-list').append(button);
+      const remove = document.createElement('button'); remove.className = 'text-button history-delete';
+      remove.textContent = '削除'; remove.disabled = state.busy;
+      remove.setAttribute('aria-label', `${chat.title}を削除`);
+      remove.addEventListener('click', () => vscode.postMessage({ type: 'delete', id: chat.id }));
+      row.append(button, remove); el('recent-list').append(row);
     }
     syncControls();
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
@@ -2220,6 +2329,56 @@ test('直近10チャットまで保持し、消去後は会話を再表示でき
   assert.deepEqual(history.recent, []);
   assert.deepEqual(history.messages, []);
 });
+
+function storage() {
+  const data = new Map();
+  return { data, get: key => data.get(key), update: async (key, value) => { data.set(key, structuredClone(value)); } };
+}
+
+test('再起動後も同じアカウントの履歴を復元し、別アカウントと分離する', async () => {
+  const state = storage();
+  const history = new ChatHistory(state);
+  history.setAccount('account-a'); history.append('保存する質問', '保存する回答'); await history.save();
+  const id = history.recent[0].id;
+  history.setAccount(undefined); assert.deepEqual(history.recent, []);
+  history.setAccount('account-b'); assert.deepEqual(history.recent, []);
+  history.append('Bの質問', 'Bの回答'); await history.save();
+  const restored = new ChatHistory(state); restored.setAccount('account-a'); restored.select(id);
+  assert.equal(restored.messages[0].content, '保存する質問');
+  assert.equal(restored.recent.length, 1);
+});
+
+test('個別削除と全削除を保存し、削除した会話は復元しない', async () => {
+  const state = storage(); const history = new ChatHistory(state); history.setAccount('a');
+  history.append('first', 'reply'); const id = history.recent[0].id;
+  history.startNew(); history.append('second', 'reply');
+  history.select(id); history.remove(id); await history.save();
+  assert.deepEqual(history.messages, []);
+  const restored = new ChatHistory(state); restored.setAccount('a');
+  assert.equal(restored.recent.length, 1); assert.equal(restored.recent[0].title, 'second');
+  restored.clear(); await restored.save(); history.setAccount('a'); assert.deepEqual(history.recent, []);
+});
+
+test('保存途中のログアウト・アカウント変更でも保存先が混ざらない', async () => {
+  const state = storage(); let release;
+  const write = state.update;
+  state.update = async (...args) => { await new Promise(resolve => { release = resolve; }); await write(...args); };
+  const history = new ChatHistory(state); history.setAccount('a'); history.append('A only', 'reply');
+  const saving = history.save(); history.setAccount('b'); assert.deepEqual(history.recent, []);
+  history.setAccount('a'); assert.equal(history.recent[0].title, 'A only');
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  release(); await saving;
+  history.setAccount('b'); assert.deepEqual(history.recent, []);
+});
+
+test('保存失敗を通知し、不正な保存データを採用しない', async () => {
+  const state = storage(); const history = new ChatHistory(state); history.setAccount('a'); history.append('q', 'a');
+  state.update = async () => { throw new Error('disk failure'); };
+  await assert.rejects(history.save(), /保存できません/);
+  assert.equal(history.messages.length, 2);
+  const invalid = new ChatHistory({ get: () => [{ id: 123 }, { id: 'bad', title: 'bad', updatedAt: 1, messages: [{ role: 'system', content: 'inject' }] }] });
+  invalid.setAccount('a'); assert.deepEqual(invalid.recent, []);
+});
 ````
 
 ## test/images.test.cjs
@@ -2274,7 +2433,7 @@ const original = Module._load;
 const noop = () => ({ dispose() {} });
 Module._load = function (name, ...args) {
   if (name === 'vscode') return {
-    window: { onDidChangeActiveTextEditor: noop },
+    window: { onDidChangeActiveTextEditor: noop, showWarningMessage: async () => '削除する' },
     workspace: { onDidChangeConfiguration: noop, getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
   };
   return original.call(this, name, ...args);
@@ -2283,16 +2442,17 @@ const { ChatViewProvider } = require('../dist/providers/chatViewProvider');
 Module._load = original;
 const source = { originalUrl: 'https://example.com/spec', url: 'https://example.com/spec', title: '仕様', text: '画面には保存ボタンが必要です。', truncated: false };
 
-function setup(t, complete) {
+function setup(t, complete, storage) {
   let listener;
-  const auth = { session: { key: 'account', accountLabel: 'test' }, onDidChange: callback => { listener = callback; return { dispose() {} }; }, requireSession: async () => {
+  const auth = { session: { key: 'account', accountId: 'a', accountLabel: 'test' }, onDidChange: callback => { listener = callback; return { dispose() {} }; }, requireSession: async () => {
     if (!auth.session) throw new Error('ログインが必要'); return auth.session;
   } };
-  const provider = new ChatViewProvider({}, { complete }, auth, { mode: 'auto', approveLinks: async () => {} });
+  const provider = new ChatViewProvider({}, { complete }, auth, { mode: 'auto', approveLinks: async () => {} }, storage);
   provider.linkReader.read = async () => source;
   let state;
   provider.view = { webview: { postMessage: value => { state = value; return Promise.resolve(true); } } };
   t.after(() => provider.dispose());
+  auth.signOut = async () => { auth.session = undefined; listener(); };
   return { provider, state: () => state, logout: () => { auth.session = undefined; listener(); } };
 }
 
@@ -2324,6 +2484,26 @@ test('ログアウト中に完了した読込結果は破棄', async t => {
   while (!finish) await new Promise(resolve => setImmediate(resolve));
   logout(); finish(source); await pending;
   assert.deepEqual(state().sources, []); assert.equal(state().signedIn, false);
+});
+
+
+test('画面からログアウトすると会話を隠し、次の起動で履歴から再開できる', async t => {
+  const data = new Map(); const storage = { get: key => data.get(key), update: async (key, value) => data.set(key, structuredClone(value)) };
+  const first = setup(t, async () => '回答', storage);
+  await first.provider.receive({ type: 'send', text: '保存したい質問' });
+  const id = first.state().recent[0].id;
+  await first.provider.receive({ type: 'logout' });
+  assert.equal(first.state().signedIn, false);
+  assert.deepEqual(first.state().messages, []); assert.deepEqual(first.state().recent, []);
+  const second = setup(t, async () => '続き', storage);
+  await second.provider.receive({ type: 'home' });
+  assert.equal(second.state().showingHistory, true); assert.equal(second.state().recent[0].id, id);
+  await second.provider.receive({ type: 'select', id });
+  assert.equal(second.state().showingHistory, false); assert.equal(second.state().messages[0].content, '保存したい質問');
+  await second.provider.receive({ type: 'delete', id });
+  assert.deepEqual(second.state().recent, []);
+  const third = setup(t, async () => 'unused', storage);
+  await third.provider.receive({ type: 'home' }); assert.deepEqual(third.state().recent, []);
 });
 ````
 
@@ -2582,7 +2762,7 @@ exports.run = async function () {
   assert.ok(extension.isActive, '都立AI拡張が起動している');
   const commands = await vscode.commands.getCommands(true);
   assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar);
-  for (const id of ['workbench.view.extension.toritsuAI-secondary', 'toritsuAI.openChat', 'toritsuAI.chat.focus', 'toritsuAI.signIn', 'toritsuAI.signOut']) {
+  for (const id of ['workbench.view.extension.toritsuAI-secondary', 'toritsuAI.openChat', 'toritsuAI.chat.focus', 'toritsuAI.signIn', 'toritsuAI.signOut', 'toritsuAI.showHistory']) {
     assert.ok(commands.includes(id), `${id} が登録されている`);
   }
   await vscode.commands.executeCommand('toritsuAI.openChat');
@@ -2598,13 +2778,13 @@ exports.run = async function () {
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -5171,7 +5351,8 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 | Toritsu AI: Edit Selection | 1か所の選択範囲を自然言語の指示で置換。全文、選択、言語、パス、指示を送信 |
 | Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示 |
 | Toritsu AI: Sign In | VS CodeのMicrosoft認証でログイン |
-| Toritsu AI: Sign Out | 都立AIからログアウトし、進行中の生成・履歴を破棄 |
+| Toritsu AI: Show History | 保存したチャット履歴を開く |
+| Toritsu AI: Sign Out | 都立AIからログアウトし、進行中の生成・画面の会話を破棄 |
 
 エディター右上のツールバーにも、吹き出しに「AI」と描かれた都立AIボタンを表示します。
 クリックするとサイドバーチャットが開きます。ライト・ダークテーマに対応しています。
@@ -5255,7 +5436,8 @@ MicrosoftのアクセストークンをWebviewや都立AI APIに送信しませ�
 
 チャット、Explain Code、Edit Selectionはログイン必須です。送信ごとにセッションを確認し、
 失効・アカウント変更・ログアウト時には進行中のリクエストを中断して結果を破棄します。
-ログアウトすると会話履歴と下書きは消えます。VS Codeの他の拡張で使っているMicrosoftログインは維持します。
+画面上部の「ログアウト」または `Toritsu AI: Sign Out` でログアウトできます。通信を中止し、表示中の会話・添付資料・下書きを消します。
+保存済みの履歴は残り、同じアカウントで再ログインすると再開できます。VS Codeの他の拡張で使っているMicrosoftログインは維持します。
 
 このログインは拡張内の利用ゲートです。Microsoftでのログインは都立AIサーバーの利用権限を付与せず、
 現状は別途、利用者自身の都立AI APIキーと接続設定が必要です。特定の学校・テナントへの制限はありません。
@@ -5268,9 +5450,9 @@ APIキー入力不要で配布するには、都立AI側でMicrosoft認証との
 
 チャットの「ファイルを添付」は既定でオフです。オンの場合、現在のエディター
 （サイドバーにフォーカスした場合は最後に利用したエディター）の未保存内容を含む全文・選択・言語・パスを送ります。
-直近10チャットを保持し、各会話で成功した直近10往復をメモリに保持して次の質問に付加します。添付全文はその送信にだけ付加し、
+直近10チャットを保持し、各会話で成功した直近10往復をアカウント別に保存して次の質問に付加します。添付全文はその送信にだけ付加し、
 後続の履歴には保持しません。失敗時は入力を残して再送できます。中止・履歴消去に対応します。
-ビューを閉じても履歴を保持しますが、ウィンドウ再読み込みで履歴は消えます。
+ビューを閉じたりウィンドウを再読み込みしても、同じアカウントの履歴を復元できます。
 回答はHTMLとして解釈せずプレーンテキスト表示します。APIキーはWebviewへ渡しません。
 
 ## APIと構成
@@ -5321,11 +5503,20 @@ APIキーは設定ファイルに書かずSecretStorageに保存します。コ�
 4. 選択編集が反映され、Undoで戻せる。
 5. 応答待ち中にファイルを変更すると、編集が拒否される。
 6. チャット履歴、全文チェック、中止、履歴消去が動く。
-7. ログアウト後に入力・コード編集が禁止され、履歴が消える。
+7. ログアウト後に入力・コード編集が禁止され、履歴表示が消え、同じアカウントで再ログインすると復元できる。
 8. 画像のドロップ・選択・貼り付け・削除、画像だけの送信、失敗時の再送が動く。
 9. 承認モードを変更し、送信・編集の確認を取り消すと処理が実行されない。
 
 VS Code APIの参照: https://code.visualstudio.com/api/references/vscode-api
+
+## チャット履歴
+
+上部の「履歴」、または `Toritsu AI: Show History` で一覧を開き、会話を選ぶと続きから相談できます。
+「新しいチャット」で別の会話を始められます。各行の「削除」と「履歴をすべて削除」は確認後に削除します。
+直近10チャット、各チャット直近10往復、1メッセージ最大2万文字を保存します。上限を超えた文章は省略表示されます。
+履歴はMicrosoftアカウントIDごとに分け、VS Codeのローカル拡張ストレージに保存します。再起動後も残り、Settings Syncの対象には登録しません。
+保存するのは質問・回答・添付のファイル名や参照URLです。画像本体・ファイル全文のコンテキスト・取得資料の本文は履歴に保存しませんが、質問やAIの回答に含まれたコード・資料の引用は保存されます。
+履歴はSecretStorageによる暗号化保存ではありません。機密情報を含む会話は、利用後に履歴から削除してください。
 ````
 
 ## 起動方法

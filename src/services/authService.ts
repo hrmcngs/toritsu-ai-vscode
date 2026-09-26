@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 const ACCOUNT_KEY = 'toritsuAI.signedInAccount';
 const SCOPES = ['User.Read'];
 
-export interface LoginSession { key: string; accountLabel: string }
+export interface LoginSession { key: string; accountId: string; accountLabel: string }
 
 export interface Authentication {
   readonly session: LoginSession | undefined;
@@ -31,7 +31,7 @@ export class AuthService implements Authentication, vscode.Disposable {
   private update(session?: vscode.AuthenticationSession): void {
     const key = session ? `${session.account.id}:${session.id}` : undefined;
     if (key === this.current?.key) return;
-    this.current = session ? { key: key!, accountLabel: session.account.label } : undefined;
+    this.current = session ? { key: key!, accountId: session.account.id, accountLabel: session.account.label } : undefined;
     this.changed.fire(this.current);
   }
 

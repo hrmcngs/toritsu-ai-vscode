@@ -88,3 +88,13 @@ button:disabled { opacity: .4; cursor: default; }
 .source-url { font-size: 10px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 #load-links { font-size: 11px; }
 .composer-actions { flex-wrap: wrap; }
+
+.account-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.account-bar #account { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+#logout { flex-shrink: 0; color: var(--vscode-foreground); }
+#recent h2 { font-size: 15px; font-weight: 500; }
+.history-note { font-size: 11px; line-height: 1.6; }
+.history-row { display: flex; align-items: center; gap: 4px; }
+.history-row .recent-item { min-width: 0; flex: 1; }
+.history-delete { flex-shrink: 0; font-size: 11px; }
+.recent-item[aria-current=true] { background: var(--vscode-list-inactiveSelectionBackground); }
