@@ -16,7 +16,7 @@ export class ApprovalService {
     if (value !== 'ask' && value !== 'auto' && value !== 'full') throw new Error('不正な承認モードです。');
     if (value === 'full' && this.mode !== 'full') {
       const result = await vscode.window.showWarningMessage('都立AIの操作を確認なしで実行しますか？', {
-        modal: true, detail: '設定したAPIへの送信と、選択範囲の編集確認を省略します。任意ファイルの操作・シェル実行機能はありません。ログインと変更競合の検出は引き続き有効です。'
+        modal: true, detail: '設定したAPIへの送信と、選択範囲の編集確認を省略します。任意ファイルの操作・シェル実行機能はありません。APIキーの確認と変更競合の検出は引き続き有効です。'
       }, '確認なしにする');
       if (result !== '確認なしにする') return;
     }

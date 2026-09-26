@@ -9,7 +9,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -53,11 +53,11 @@
       },
       {
         "command": "toritsuAI.signIn",
-        "title": "Toritsu AI: Sign In"
+        "title": "Toritsu AI: Connect with API Key"
       },
       {
         "command": "toritsuAI.signOut",
-        "title": "Toritsu AI: Sign Out"
+        "title": "Toritsu AI: Remove API Key"
       },
       {
         "command": "toritsuAI.showHistory",
@@ -161,23 +161,6 @@
           "scope": "machine",
           "description": "モデル一覧APIのパス。OpenAI互換のGET /v1/models（data[].id）を使用します。"
         },
-        "toritsuAI.connectionMode": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "browser",
-            "api"
-          ],
-          "default": "auto",
-          "scope": "machine",
-          "description": "auto: API接続先がなければブラウザへ質問をコピーして引き継ぎます。"
-        },
-        "toritsuAI.browserUrl": {
-          "type": "string",
-          "default": "https://ai.metro.tokyo.lg.jp/",
-          "scope": "machine",
-          "description": "質問を引き継ぐブラウザ版のURL。API接続先とは別です。"
-        },
         "toritsuAI.requestTimeoutSeconds": {
           "type": "number",
           "default": 180,
@@ -210,9 +193,6 @@
     "@vscode/vsce": "^4.0.0",
     "typescript": "~5.6.3"
   },
-  "extensionDependencies": [
-    "vscode.microsoft-authentication"
-  ],
   "dependencies": {
     "cheerio": "^1.0.0",
     "ipaddr.js": "^2.2.0",
@@ -378,13 +358,13 @@ export async function openChat(): Promise<void> {
 import * as vscode from 'vscode';
 import { API_KEY_SECRET } from '../services/toritsuAiClient';
 
-export async function setApiKey(secrets: vscode.SecretStorage): Promise<void> {
+export async function setApiKey(secrets: vscode.SecretStorage, token?: vscode.CancellationToken): Promise<void> {
   const value = await vscode.window.showInputBox({
     title: 'Toritsu AI: Set API Key', password: true, ignoreFocusOut: true,
     prompt: '都立AIのAPIキーを入力してください（SecretStorageに保存）。',
     validateInput: text => text.trim() ? undefined : 'APIキーを入力してください。'
-  });
-  if (value === undefined) return;
+  }, token);
+  if (token?.isCancellationRequested || value === undefined) return;
   await secrets.store(API_KEY_SECRET, value.trim());
   void vscode.window.showInformationMessage('都立AIのAPIキーを保存しました。');
 }
@@ -395,10 +375,8 @@ export async function setApiKey(secrets: vscode.SecretStorage): Promise<void> {
 ````typescript
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { BrowserHandoff } from './services/browserHandoff';
 import { ConnectionSetup } from './services/connectionSetup';
 import { ModelSelection } from './services/modelSelection';
-import { setApiKey } from './commands/setApiKey';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
 import { openChat } from './commands/openChat';
@@ -411,7 +389,7 @@ import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const auth = new AuthService(context.globalState);
+  const auth = new AuthService(context.secrets);
   context.subscriptions.push(auth);
   await auth.restore();
   const transport = new ToritsuAiClient(() => {
@@ -444,22 +422,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return new ApprovedClient(approvals, transport).complete(messages, signal);
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await openChat(); throw error; }
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
-    ['toritsuAI.setupConnection', () => authorized(async () => { await setup.ensureConnection(); await models.select('custom'); })],
-    ['toritsuAI.setApiKey', () => setApiKey(context.secrets)],
+    ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(); await auth.restore(); await models.select('custom'); }],
+    ['toritsuAI.setApiKey', () => auth.signIn()],
     ['toritsuAI.explainCode', () => authorized(() => explainCode(client))],
     ['toritsuAI.editSelection', () => authorized(async () => {
       const session = await auth.requireSession();
       await editSelection(client, async (uri, code) => {
         await approvals.approveEdit(uri, code);
         if ((await auth.requireSession()).key !== session.key) {
-          throw new Error('ログインアカウントが変わったため、編集を適用しませんでした。');
+          throw new Error('APIキーまたは接続先が変わったため、編集を適用しませんでした。');
         }
       });
     })],
@@ -501,13 +479,13 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="settings" class="icon-button" title="都立AIの接続設定" aria-label="都立AIの接続設定">${icon('M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z')}</button>
 <button id="new" class="icon-button" title="新しいチャット" aria-label="新しいチャット">${icon('M14 4H5v15h15v-9M13 11l7-8 2 2-7 8-4 1 2-3Z')}</button>
 </div></header>
-<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="都立AIからログアウト">ログアウト</button></div>
+<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="保存したAPIキーを削除">キーを削除</button></div>
 <main id="content">
-<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のアカウントの履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のAPI接続の履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
 <button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
-<h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">Microsoftアカウントでログインして、コードの相談を始めましょう。</p>
-<button id="login" class="primary">Microsoftでログイン</button></section>
+<h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。</p>
+<button id="login" class="primary">APIキーを登録</button></section>
 <div id="messages" role="log" aria-live="polite"></div>
 </main>
 <footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
@@ -684,7 +662,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (message.type === 'login') {
         if (this.signingIn) return;
         this.signingIn = true; this.error = ''; this.publish();
-        try { await this.auth.signIn(); }
+        try {
+          await this.auth.signIn();
+          if (this.auth.session) await vscode.commands.executeCommand('toritsuAI.setupConnection');
+        }
         finally { this.signingIn = false; }
         return;
       }
@@ -782,7 +763,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const id = typeof message.id === 'string' ? message.id : undefined;
         if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
         const confirmed = await vscode.window.showWarningMessage(
-          message.type === 'clear' ? 'このアカウントの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          message.type === 'clear' ? 'このAPI接続の履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
           { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
@@ -828,7 +809,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
         const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode }), controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-          throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
+          throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
         }
         const historyText = images.length ? `${text}\n\n[添付画像: ${images.map(image => image.name).join(', ')}。画像本体はこの送信のみに含まれます]` : text;
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';
@@ -883,7 +864,7 @@ export class ApprovalService {
     if (value !== 'ask' && value !== 'auto' && value !== 'full') throw new Error('不正な承認モードです。');
     if (value === 'full' && this.mode !== 'full') {
       const result = await vscode.window.showWarningMessage('都立AIの操作を確認なしで実行しますか？', {
-        modal: true, detail: '設定したAPIへの送信と、選択範囲の編集確認を省略します。任意ファイルの操作・シェル実行機能はありません。ログインと変更競合の検出は引き続き有効です。'
+        modal: true, detail: '設定したAPIへの送信と、選択範囲の編集確認を省略します。任意ファイルの操作・シェル実行機能はありません。APIキーの確認と変更競合の検出は引き続き有効です。'
       }, '確認なしにする');
       if (result !== '確認なしにする') return;
     }
@@ -944,9 +925,9 @@ export class ApprovedClient implements LlmClient {
 
 ````typescript
 import * as vscode from 'vscode';
-
-const ACCOUNT_KEY = 'toritsuAI.signedInAccount';
-const SCOPES = ['User.Read'];
+import { createHash, randomUUID } from 'node:crypto';
+import { API_KEY_SECRET } from './toritsuAiClient';
+import { setApiKey } from '../commands/setApiKey';
 
 export interface LoginSession { key: string; accountId: string; accountLabel: string }
 
@@ -956,68 +937,68 @@ export interface Authentication {
   requireSession(): Promise<LoginSession>;
 }
 
+/** Local readiness gate only. The API server validates the actual key on each request. */
 export class AuthService implements Authentication, vscode.Disposable {
   private current?: LoginSession;
   private revision = 0;
-  private accountId: string | undefined;
+  private keyPrompt?: vscode.CancellationTokenSource;
   private readonly changed = new vscode.EventEmitter<LoginSession | undefined>();
   readonly onDidChange = this.changed.event;
-  private readonly subscription: vscode.Disposable;
+  private readonly subscriptions: vscode.Disposable[];
 
-  constructor(private readonly state: vscode.Memento) {
-    this.accountId = state.get<string>(ACCOUNT_KEY);
-    this.subscription = vscode.authentication.onDidChangeSessions(event => {
-      if (event.provider.id === 'microsoft') void this.restore();
-    });
+  constructor(private readonly secrets: vscode.SecretStorage) {
+    const refresh = () => {
+      ++this.revision;
+      this.update();
+      void this.restore().catch(() => {});
+    };
+    this.subscriptions = [
+      secrets.onDidChange(event => { if (event.key === API_KEY_SECRET) refresh(); }),
+      vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('toritsuAI.baseUrl')) refresh(); })
+    ];
   }
 
   get session(): LoginSession | undefined { return this.current; }
 
-  private update(session?: vscode.AuthenticationSession): void {
-    const key = session ? `${session.account.id}:${session.id}` : undefined;
-    if (key === this.current?.key) return;
-    this.current = session ? { key: key!, accountId: session.account.id, accountLabel: session.account.label } : undefined;
+  private update(accountId?: string): void {
+    if (accountId === this.current?.accountId) return;
+    this.current = accountId ? { key: randomUUID(), accountId, accountLabel: 'APIキー登録済み（接続未確認）' } : undefined;
     this.changed.fire(this.current);
   }
 
   async restore(): Promise<void> {
     const revision = this.revision;
-    const saved = this.accountId;
-    if (!saved) { this.update(); return; }
-    try {
-      const session = await vscode.authentication.getSession('microsoft', SCOPES, { silent: true });
-      if (revision !== this.revision) return;
-      this.update(session?.account.id === saved ? session : undefined);
-    } catch {
-      if (revision === this.revision) this.update();
-    }
+    const key = await this.secrets.get(API_KEY_SECRET);
+    if (revision !== this.revision) return;
+    const baseUrl = vscode.workspace.getConfiguration('toritsuAI').get<string>('baseUrl', '').trim().replace(/\/+$/, '');
+    // Never publish the key; separate saved history by endpoint and credential fingerprint.
+    this.update(key?.trim() ? createHash('sha256').update(JSON.stringify([baseUrl, key])).digest('hex') : undefined);
   }
 
   async signIn(): Promise<void> {
-    const revision = ++this.revision;
-    const session = await vscode.authentication.getSession('microsoft', SCOPES, { createIfNone: true });
-    if (revision !== this.revision) return;
-    await this.state.update(ACCOUNT_KEY, session.account.id);
-    if (revision === this.revision) {
-      this.accountId = session.account.id;
-      this.update(session);
-    }
+    this.keyPrompt?.cancel();
+    const prompt = new vscode.CancellationTokenSource();
+    this.keyPrompt = prompt;
+    try {
+      await setApiKey(this.secrets, prompt.token);
+      if (!prompt.token.isCancellationRequested) await this.restore();
+    } finally { if (this.keyPrompt === prompt) this.keyPrompt = undefined; prompt.dispose(); }
   }
 
   async signOut(): Promise<void> {
+    this.keyPrompt?.cancel();
     ++this.revision;
-    this.accountId = undefined;
     this.update();
-    await this.state.update(ACCOUNT_KEY, undefined);
+    await this.secrets.delete(API_KEY_SECRET);
   }
 
   async requireSession(): Promise<LoginSession> {
     await this.restore();
-    if (!this.current) throw new Error('都立AIにログインしてください。右上のAIボタンからログインできます。');
+    if (!this.current) throw new Error('APIキーを登録してください。「APIキーを登録」から設定できます。');
     return this.current;
   }
 
-  dispose(): void { this.subscription.dispose(); this.changed.dispose(); }
+  dispose(): void { this.keyPrompt?.cancel(); this.keyPrompt?.dispose(); for (const subscription of this.subscriptions) subscription.dispose(); this.changed.dispose(); }
 }
 ````
 
@@ -1028,7 +1009,7 @@ import { Authentication } from './authService';
 import { LlmClient } from './llmClient';
 import { Message } from '../types/ai';
 
-// MicrosoftのトークンはAIサーバーへ送らない。接続先の認証は別のクライアントが担当。
+// APIキーの削除・変更や接続先変更で、進行中の処理と結果の適用を中止する。
 export class AuthenticatedClient implements LlmClient {
   constructor(private readonly auth: Authentication, private readonly client: LlmClient) {}
 
@@ -1041,11 +1022,11 @@ export class AuthenticatedClient implements LlmClient {
     if (signal?.aborted) cancel();
     try {
       if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-        throw new Error('ログイン状態の変更またはキャンセルにより、送信しませんでした。');
+        throw new Error('APIキー・接続先の変更またはキャンセルにより、送信しませんでした。');
       }
       const result = await this.client.complete(messages, controller.signal);
       if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-        throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
+        throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
       }
       return result;
     } finally {
@@ -2409,12 +2390,12 @@ button:disabled { opacity: .4; cursor: default; }
     for (const id of ['custom-model', 'configure-models']) el(id).disabled = state.busy || state.changingModel;
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
-    el('login').textContent = state.signingIn ? 'ログインを待っています…' : 'Microsoftでログイン';
+    el('login').textContent = state.signingIn ? 'APIキーを設定中…' : 'APIキーを登録';
     el('account-bar').hidden = !state.signedIn;
     el('welcome-title').textContent = state.signedIn ? '何から始めましょうか？' : '都立AIへようこそ';
     el('welcome-description').textContent = state.signedIn
       ? 'コードの説明、改善の相談、アイデアをここから。'
-      : 'Microsoftアカウントでログインして、コードの相談を始めましょう。';
+      : 'APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。';
     el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
     el('messages').hidden = state.showingHistory;
     el('messages').replaceChildren();
@@ -2569,102 +2550,76 @@ test('確認の待機中にキャンセルされた送信を阻止', async () =>
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
-
 class Emitter {
   listeners = new Set();
   event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
   fire(value) { for (const listener of this.listeners) listener(value); }
   dispose() { this.listeners.clear(); }
 }
-let remote;
-let options;
-const events = new Emitter();
+let input, baseUrl;
+const configuration = new Emitter();
 const original = Module._load;
-Module._load = function (name, ...args) {
+Module._load = function(name, ...args) {
   if (name === 'vscode') return {
     EventEmitter: Emitter,
-    authentication: {
-      onDidChangeSessions: events.event,
-      getSession: async (provider, scopes, opts) => {
-        assert.equal(provider, 'microsoft');
-        assert.deepEqual(scopes, ['User.Read']);
-        options = opts;
-        if (opts.createIfNone && !remote) throw new Error('キャンセル');
-        return remote;
-      }
-    }
+    CancellationTokenSource: class { token = { isCancellationRequested: false }; cancel() { this.token.isCancellationRequested = true; } dispose() {} },
+    workspace: { onDidChangeConfiguration: configuration.event, getConfiguration: () => ({ get: (_key, fallback) => baseUrl ?? fallback }) },
+    window: { showInputBox: async () => typeof input === 'function' ? input() : input, showInformationMessage: async () => {} },
+    authentication: { getSession: () => { throw new Error('Microsoft login must not be called'); } }
   };
   return original.call(this, name, ...args);
 };
 const { AuthService } = require('../dist/services/authService');
 Module._load = original;
 const { AuthenticatedClient } = require('../dist/services/authenticatedClient');
-
-const makeSession = id => ({ id: `session-${id}`, account: { id, label: id }, accessToken: 'never-store-or-send' });
 function setup(t) {
-  remote = undefined;
-  const stored = new Map();
-  const state = { get: key => stored.get(key), update: async (key, value) => { stored.set(key, value); } };
-  const auth = new AuthService(state);
-  t.after(() => auth.dispose());
-  return { auth, stored, state };
+  input = undefined; baseUrl = 'https://api.example.com';
+  const data = new Map(); const events = new Emitter();
+  const secrets = { get: async key => data.get(key), store: async (key, value) => { data.set(key, value); events.fire({ key }); },
+    delete: async key => { data.delete(key); events.fire({ key }); }, onDidChange: events.event };
+  const auth = new AuthService(secrets); t.after(() => auth.dispose());
+  return { auth, secrets, data };
 }
 
-test('未ログインではAPI呼び出しを阻止。既存のMicrosoftセッションだけでも自動許可しない', async t => {
-  const { auth } = setup(t);
-  remote = makeSession('school');
-  let calls = 0;
+test('APIキー未登録では送信せず、Microsoftログインを求めない', async t => {
+  const { auth } = setup(t); let calls = 0;
   const client = new AuthenticatedClient(auth, { complete: async () => { calls++; return 'ok'; } });
-  await assert.rejects(client.complete([]), /ログイン/);
-  assert.equal(calls, 0);
+  await assert.rejects(client.complete([]), /APIキー/); assert.equal(calls, 0);
 });
 
-test('ログインでアカウントIDだけ保存し、トークンを保持しない', async t => {
-  const { auth, stored, state } = setup(t);
-  remote = makeSession('school');
-  await auth.signIn();
-  assert.equal(options.createIfNone, true);
-  assert.equal(auth.session.accountLabel, 'school');
-  assert.deepEqual([...stored.values()], ['school']);
-  const client = new AuthenticatedClient(auth, { complete: async messages => {
-    assert.deepEqual(messages, [{ role: 'user', content: 'hello' }]); return 'ok';
-  } });
-  assert.equal(await client.complete([{ role: 'user', content: 'hello' }]), 'ok');
-  const restored = new AuthService(state); t.after(() => restored.dispose());
-  await restored.restore();
-  assert.equal(restored.session.accountLabel, 'school');
+test('APIキーだけで利用可能になり、表示状態にはキーを含めない', async t => {
+  const { auth, secrets, data } = setup(t); input = 'dummy-key-123'; await auth.signIn();
+  assert.equal(data.get('toritsuAI.apiKey'), input);
+  assert.match(auth.session.accountLabel, /APIキー登録済み/);
+  assert.doesNotMatch(JSON.stringify(auth.session), /dummy-key-123/);
+  const client = new AuthenticatedClient(auth, { complete: async () => 'ok' });
+  assert.equal(await client.complete([]), 'ok');
+  const restored = new AuthService(secrets); t.after(() => restored.dispose()); await restored.restore();
+  assert.equal(restored.session.accountId, auth.session.accountId);
 });
 
-test('ログアウト後はMicrosoftセッションが残っていても送信しない', async t => {
-  const { auth } = setup(t);
-  remote = makeSession('school'); await auth.signIn(); await auth.signOut();
-  await assert.rejects(auth.requireSession(), /ログイン/);
-  assert.equal(auth.session, undefined);
-});
-
-test('セッション失効・別アカウントへの切り替えを検出', async t => {
-  const { auth } = setup(t);
-  remote = makeSession('school'); await auth.signIn();
-  remote = makeSession('other');
-  await assert.rejects(auth.requireSession(), /ログイン/);
-  remote = undefined;
-  await assert.rejects(auth.requireSession(), /ログイン/);
-});
-
-test('ログアウト中の応答を破棄し、リクエストを中断', async t => {
-  const { auth } = setup(t);
-  remote = makeSession('school'); await auth.signIn();
+test('キー削除で送信不可になり、進行中の結果を破棄する', async t => {
+  const { auth, data } = setup(t); input = 'key'; await auth.signIn();
   const client = new AuthenticatedClient(auth, { complete: async (_messages, signal) => {
-    await auth.signOut(); assert.equal(signal.aborted, true); return 'late response';
+    await auth.signOut(); assert.equal(signal.aborted, true); return 'late';
   } });
   await assert.rejects(client.complete([]), /破棄/);
+  assert.equal(data.size, 0); await assert.rejects(auth.requireSession(), /APIキー/);
 });
 
-test('ログインのキャンセルでは利用可能にならない', async t => {
-  const { auth, stored } = setup(t);
-  await assert.rejects(auth.signIn(), /キャンセル/);
-  assert.equal(auth.session, undefined);
-  assert.equal(stored.size, 0);
+test('キー更新と接続先変更で履歴の識別子とセッションを切り替える', async t => {
+  const { auth, secrets } = setup(t); input = 'one'; await auth.signIn(); const first = auth.session;
+  await secrets.store('toritsuAI.apiKey', 'two'); await auth.restore();
+  assert.notEqual(auth.session.accountId, first.accountId); const second = auth.session;
+  baseUrl = 'https://other.example.com'; configuration.fire({ affectsConfiguration: key => key === 'toritsuAI.baseUrl' });
+  await auth.restore(); assert.notEqual(auth.session.accountId, second.accountId);
+});
+
+test('入力キャンセルやキー削除後に遅れて返る入力では登録しない', async t => {
+  const { auth, data } = setup(t); await auth.signIn(); assert.equal(auth.session, undefined);
+  let resolve; input = () => new Promise(done => { resolve = done; });
+  const pending = auth.signIn(); await auth.signOut(); resolve('must-not-store'); await pending;
+  assert.equal(data.size, 0); assert.equal(auth.session, undefined);
 });
 ````
 
@@ -3610,13 +3565,13 @@ exports.run = async function () {
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.7.1",
+      "version": "0.8.0",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -6152,9 +6107,9 @@ VS Codeのコマンドパレットで `Extensions: Install from VSIX...` を実�
 1. このフォルダで `npm install`、続いて `npm test` を実行します。
 2. VS Codeでこのフォルダを開き、F5（Run Toritsu AI）を実行します。
 3. 起動したExtension Development Hostで信頼済みの作業フォルダを開きます。
-4. 右上のAIボタンを押し、「Microsoftでログイン」から学校・個人のMicrosoftアカウントで認証します。
-5. ユーザー設定で `toritsuAI.baseUrl` と `toritsuAI.model` を指定します。
-6. コマンドパレットで `Toritsu AI: Set API Key` を実行します（チャット右上の接続設定からも登録できます）。
+4. 右上のAIボタンを押し、「APIキーを登録」を選択します。Microsoftログインは不要です。
+5. 続けてAPIの接続先URLを設定し、取得した一覧からモデルを選択します。
+6. キーの更新は `Toritsu AI: Set API Key`、接続設定は `Toritsu AI: Setup Connection` からも行えます。
 7. ファイルを開き、以下のコマンドを実行します。
 
 `Run Toritsu AI` はデバッガーの接続待ちで停止しないよう、デバッグなしで起動します。
@@ -6182,9 +6137,10 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 | Toritsu AI: Explain Code | 選択があれば選択部分、なければ全文を説明。結果をMarkdownエディターで表示 |
 | Toritsu AI: Edit Selection | 1か所の選択範囲を自然言語の指示で置換。全文、選択、言語、パス、指示を送信 |
 | Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示 |
-| Toritsu AI: Sign In | VS CodeのMicrosoft認証でログイン |
+| Toritsu AI: Connect with API Key | APIキーを登録（旧Sign Inの互換コマンド） |
+| Toritsu AI: Setup Connection | 接続先・キー・モデル一覧の設定 |
 | Toritsu AI: Show History | 保存したチャット履歴を開く |
-| Toritsu AI: Sign Out | 都立AIからログアウトし、進行中の生成・画面の会話を破棄 |
+| Toritsu AI: Remove API Key | 保存キーを削除し、通信・画面の会話を破棄 |
 
 エディター右上のツールバーにも、吹き出しに「AI」と描かれた都立AIボタンを表示します。
 クリックするとサイドバーチャットが開きます。ライト・ダークテーマに対応しています。
@@ -6202,7 +6158,7 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 リンクは3件、1ファイル10MBまで。PDFは最大100ページ、各資料は4万文字まで、合計8万文字までです。
 切り詰めた資料は「抜粋」と表示します。Webページ・テキスト・文字を含むPDFに対応します。
 スキャンPDFのOCR、JavaScriptでのみ表示される本文、ログインが必要なページは未対応です。
-APIキー・Microsoftトークン・ブラウザのCookieをリンク先には送信しません。
+APIキー・ブラウザのCookieをリンク先には送信しません。
 公開HTTP/HTTPSの標準ポートのみ対応し、ローカル・プライベートIPへの接続を拒否します。
 リダイレクト先も確認します。1リンクの読み込みは30秒を目安にタイムアウトし、中止ボタンで止められます。
 PDF解析は専用の子プロセスで行い、解析開始から15秒を超えた場合やキャンセル時には強制終了します。
@@ -6212,7 +6168,7 @@ PDF解析は専用の子プロセスで行い、解析開始から15秒を超え
 リンク先の取得とAIへの送信は別の操作です。毎回確認モードでは両方で確認します。
 リンクを含む質問は、先に資料を読み込んでから送信してください。
 資料の本文はその送信のみに付加し、会話履歴には出典URLだけを残します。継続して参照する場合は再度読み込んでください。
-送信失敗時は資料を保持し、成功・新規チャット・履歴切替・ログアウトで破棄します。
+送信失敗時は資料を保持し、成功・新規チャット・履歴切替・キー削除で破棄します。
 取得したHTMLは実行せず、抽出テキストとして表示します。参考資料内の命令は指示として扱わないようプロンプトを分離します。
 
 ## モデルの切り替え
@@ -6231,11 +6187,11 @@ PDF解析は専用の子プロセスで行い、解析開始から15秒を超え
 ## 画像の添付
 
 画像をチャット画面へドラッグ＆ドロップするか、入力欄左下の「＋」で選択できます。
-クリップボードから画像を貼り付ける操作にも対応します。添付前にログインしてください。
+クリップボードから画像を貼り付ける操作にも対応します。添付前にAPIキーを登録してください。
 PNG・JPEG・WebPに対応し、1枚5MB、最大4枚・合計10MBまでです。
 サムネイルの「×」で削除できます。文章なしで画像だけを送信することもできます。
 画像の読み込み・ドロップだけではAPIに送信されず、送信ボタンを押した時点で送ります。
-送信失敗時は添付を保持し、送信成功・新しい会話・ログアウト時に破棄します。
+送信失敗時は添付を保持し、送信成功・新しい会話・キー削除時に破棄します。
 
 画像対応のモデルと、OpenAI互換の `image_url` 入力に対応したAPIが必要です。
 テキストとBase64の画像を `messages[].content` 配列に含めます。
@@ -6255,27 +6211,18 @@ PNG・JPEG・WebPに対応し、1枚5MB、最大4枚・合計10MBまでです。
 | フルアクセス (`full`) | 対応するAPI送信・選択編集の確認を省略。切り替え時に一度確認 |
 
 任意ファイル操作・シェル実行機能はありません。ユーザーが指定した公開URLの資料読み込みに対応します。
-フルアクセスでもログイン必須、ファイル変更競合の検出、画像の容量制限は有効です。
+フルアクセスでもAPIキー登録必須、ファイル変更競合の検出、画像の容量制限は有効です。
 自動承認ではファイルの実パスも確認し、ワークスペース外に向くシンボリックリンクは承認を求めます。
 未保存ファイル・実パスを確認できないファイルも確認対象です。
 
-## ログイン
+## APIキーでの利用
 
-Microsoftの認証はVS Code組み込みの `vscode.microsoft-authentication` に委任します。
-ブラウザ・アカウント選択画面で認証し、パスワードをこの拡張に入力する必要はありません。
-要求するスコープは `User.Read`（本人の基本プロフィール）です。認証サービスから返る
-アカウント名を画面に表示し、拡張には復元用のアカウントIDだけを保存します。
-MicrosoftのアクセストークンをWebviewや都立AI APIに送信しません。
-
-チャット、Explain Code、Edit Selectionはログイン必須です。送信ごとにセッションを確認し、
-失効・アカウント変更・ログアウト時には進行中のリクエストを中断して結果を破棄します。
-画面上部の「ログアウト」または `Toritsu AI: Sign Out` でログアウトできます。通信を中止し、表示中の会話・添付資料・下書きを消します。
-保存済みの履歴は残り、同じアカウントで再ログインすると再開できます。VS Codeの他の拡張で使っているMicrosoftログインは維持します。
-
-このログインは拡張内の利用ゲートです。Microsoftでのログインは都立AIサーバーの利用権限を付与せず、
-現状は別途、利用者自身の都立AI APIキーと接続設定が必要です。特定の学校・テナントへの制限はありません。
-APIキー入力不要で配布するには、都立AI側でMicrosoft認証との連携または専用の認証APIを用意し、
-`AuthService` とAPIクライアントを接続する必要があります。共有APIキーを拡張に埋め込まないでください。
+Microsoftログインは不要です。APIキーはVS CodeのSecretStorageに保存し、画面・設定ファイル・履歴にキー自体を渡しません。
+「APIキー登録済み（接続未確認）」は保存状態を示します。有効性と利用権限は接続先APIが判定します。
+キーの削除・変更や接続先の変更では、進行中のリクエストを中断して結果を破棄します。
+画面上部の「キーを削除」または `Toritsu AI: Remove API Key` でSecretStorageからキーを削除できます。
+履歴は接続先URLとキーの指紋で分離し、同じ組み合わせを再登録すると復元します。古いMicrosoftアカウント単位の履歴は自動移行しません。
+ブラウザの都立AIアカウントとは連携しません。拡張内の通信には、API提供元から発行されたキーと対応するAPIのURLが必要です。
 
 編集は自動保存せず、Undoで戻せます。リクエスト開始後に元ファイルが変更・クローズされた場合は適用しません。
 選択範囲を後から移動しても、取得時の範囲を編集します。複数選択と空選択は拒否します。
@@ -6283,9 +6230,9 @@ APIキー入力不要で配布するには、都立AI側でMicrosoft認証との
 
 チャットの「ファイルを添付」は既定でオフです。オンの場合、現在のエディター
 （サイドバーにフォーカスした場合は最後に利用したエディター）の未保存内容を含む全文・選択・言語・パスを送ります。
-直近10チャットを保持し、各会話で成功した直近10往復をアカウント別に保存して次の質問に付加します。添付全文はその送信にだけ付加し、
+直近10チャットを保持し、各会話で成功した直近10往復をAPI接続別に保存して次の質問に付加します。添付全文はその送信にだけ付加し、
 後続の履歴には保持しません。失敗時は入力を残して再送できます。中止・履歴消去に対応します。
-ビューを閉じたりウィンドウを再読み込みしても、同じアカウントの履歴を復元できます。
+ビューを閉じたりウィンドウを再読み込みしても、同じAPI接続の履歴を復元できます。
 回答はHTMLとして解釈せずプレーンテキスト表示します。APIキーはWebviewへ渡しません。
 
 ## APIと構成
@@ -6307,8 +6254,8 @@ Content-Type: application/json
 ```
 
 - `src/services/llmClient.ts`: VS Codeに依存しないクライアントインターフェース。
-- `src/services/authService.ts`: Microsoftログインとアカウント復元。
-- `src/services/authenticatedClient.ts`: 未ログインの送信阻止、ログアウト時のキャンセル。
+- `src/services/authService.ts`: APIキーの準備状態と接続先別の識別。
+- `src/services/authenticatedClient.ts`: キー未登録の送信阻止、キー削除時のキャンセル。
 - `src/services/chatHistory.ts`: 会話単位の履歴管理。
 - `src/services/approvalService.ts`: 承認モードの保存とAPI送信・編集の確認。
 - `src/services/imageAttachments.ts`: 画像形式・容量のホスト側検証。
@@ -6330,13 +6277,13 @@ APIキーは設定ファイルに書かずSecretStorageに保存します。コ�
 `npm test` で型チェックとNode.jsのテストを実行します。
 実際のAPIキー・接続先が必要な実通信とVS Code UIは、F5で以下を確認してください。
 
-1. 未ログインでは送信できず、ブラウザでMicrosoftログイン後に入力できる。
+1. キー未登録では送信できず、APIキーの登録だけで入力できる。
 2. キー未設定・URL未設定時にエラーが表示される。
 3. 選択あり／なしで説明対象が変わる。
 4. 選択編集が反映され、Undoで戻せる。
 5. 応答待ち中にファイルを変更すると、編集が拒否される。
 6. チャット履歴、全文チェック、中止、履歴消去が動く。
-7. ログアウト後に入力・コード編集が禁止され、履歴表示が消え、同じアカウントで再ログインすると復元できる。
+7. キー削除後に入力・コード編集が禁止され、履歴表示が消え、同じキーと接続先を再登録すると復元できる。
 8. 画像のドロップ・選択・貼り付け・削除、画像だけの送信、失敗時の再送が動く。
 9. 承認モードを変更し、送信・編集の確認を取り消すと処理が実行されない。
 
@@ -6347,7 +6294,7 @@ VS Code APIの参照: https://code.visualstudio.com/api/references/vscode-api
 上部の「履歴」、または `Toritsu AI: Show History` で一覧を開き、会話を選ぶと続きから相談できます。
 「新しいチャット」で別の会話を始められます。各行の「削除」と「履歴をすべて削除」は確認後に削除します。
 直近10チャット、各チャット直近10往復、1メッセージ最大2万文字を保存します。上限を超えた文章は省略表示されます。
-履歴はMicrosoftアカウントIDごとに分け、VS Codeのローカル拡張ストレージに保存します。再起動後も残り、Settings Syncの対象には登録しません。
+履歴は接続先URLとキーの指紋ごとに分け、VS Codeのローカル拡張ストレージに保存します。再起動後も残り、Settings Syncの対象には登録しません。
 保存するのは質問・回答・添付のファイル名や参照URLです。画像本体・ファイル全文のコンテキスト・取得資料の本文は履歴に保存しませんが、質問やAIの回答に含まれたコード・資料の引用は保存されます。
 履歴はSecretStorageによる暗号化保存ではありません。機密情報を含む会話は、利用後に履歴から削除してください。
 
@@ -6363,20 +6310,15 @@ VS Code APIの参照: https://code.visualstudio.com/api/references/vscode-api
 
 ファイルは最大20件・1件100KiB・合計8万文字。フォルダーは深さ5階層・最大500項目を調べ、隠しファイル、依存・ビルドフォルダー、ロックファイル、シンボリックリンク、バイナリなどを除外します。省略があれば画面に表示します。未保存の編集ではなくディスク上の内容を読みます。
 ファイル本文は今回の送信のみで、送信成功後は添付から外れ、履歴にはファイル名を残します。質問・回答に引用された内容は履歴に残ります。
-目標・プラン設定は新規チャット、履歴切替、ログアウトで解除されます。外部プラグイン連携は今回の追加対象に含みません。
+目標・プラン設定は新規チャット、履歴切替、キー削除で解除されます。外部プラグイン連携は今回の追加対象に含みません。
 
-## ブラウザ版だけを利用している場合
+## 接続先とモデル
 
-APIの接続先が未設定なら、自動でブラウザ版モードになります。APIキー・モデルIDは不要です。
-質問と必要なファイルを準備し、入力欄の送信ボタンから「コピーして開く」を選ぶと、質問・会話履歴・選択したコードや資料をクリップボードにコピーし、都立AIのWebサイトを開きます。
-ブラウザでログインし、貼り付けて送信してください。モデルの選択と回答の確認もブラウザ側で行います。
-画像・スケッチはブラウザで別途添付してください。自動送信・ブラウザのログイン共有・回答の自動取り込みには対応しません。下書きと添付は拡張に残し、ブラウザの回答を履歴に保存したようには扱いません。
-開くページは `toritsuAI.browserUrl`（既定 `https://ai.metro.tokyo.lg.jp/`）で変更できます。`toritsuAI.connectionMode` を `browser` にすると、API設定があってもブラウザ版モードを使えます。
+0.8.0ではAPIキー方式を使用し、ブラウザ版への自動引き継ぎは行いません。
+API提供元のURLとキーを設定し、モデル一覧から選択してください。一覧API非対応時はモデルIDの確認が必要です。
+添付されたライセンス一覧からモデルIDは特定できません。ライブラリの「Model License」はAIモデル名ではありません。
 
-APIによる拡張内チャットを使うには、管理者・提供元から案内されたAPIのURLとキーが必要です。ブラウザ版のURL・Microsoftログインはその代わりにはなりません。
-`Toritsu AI: Setup Connection` または設定ボタンの「接続設定を始める」で設定できます。API接続時にモデルが未設定なら一覧から選択します。一覧API非対応時には利用可能なIDを自動判定できません。
-
-チャットの待機時間は `toritsuAI.requestTimeoutSeconds`（10〜600秒）、モデル一覧は `toritsuAI.modelListTimeoutSeconds`（5〜120秒）で変更できます。中止・ログアウトは待機時間に関係なく通信を中断します。これらは拡張側の制限で、サーバーが返すHTTP 504等や、認証仕様の不一致を解決する設定ではありません。
+チャットの待機時間は `toritsuAI.requestTimeoutSeconds`（10〜600秒）、モデル一覧は `toritsuAI.modelListTimeoutSeconds`（5〜120秒）で変更できます。中止・キー削除は待機時間に関係なく通信を中断します。これらは拡張側の制限で、サーバーが返すHTTP 504等や、認証仕様の不一致を解決する設定ではありません。
 ````
 
 ## 起動方法
@@ -6388,4 +6330,4 @@ npm test
 npm run package
 ```
 
-VS Codeの `Extensions: Install from VSIX...` で `toritsu-ai.vsix` を選択し、`Developer: Reload Window` を実行します。都立AIからMicrosoftでログインし、API接続先とキー、モデルを設定してください。URLを貼り付けて「リンクを読み込む」を押すと、Webページ・PDFを参考資料として確認し、作成指示と一緒に送信できます。
+VS Codeの `Extensions: Install from VSIX...` で `toritsu-ai.vsix` を選択し、`Developer: Reload Window` を実行します。都立AIの「APIキーを登録」からキーを保存し、API接続先とモデルを設定してください。URLを貼り付けて「リンクを読み込む」を押すと、Webページ・PDFを参考資料として確認し、作成指示と一緒に送信できます。

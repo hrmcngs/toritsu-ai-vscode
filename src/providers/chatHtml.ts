@@ -18,13 +18,13 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="settings" class="icon-button" title="都立AIの接続設定" aria-label="都立AIの接続設定">${icon('M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z')}</button>
 <button id="new" class="icon-button" title="新しいチャット" aria-label="新しいチャット">${icon('M14 4H5v15h15v-9M13 11l7-8 2 2-7 8-4 1 2-3Z')}</button>
 </div></header>
-<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="都立AIからログアウト">ログアウト</button></div>
+<div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="保存したAPIキーを削除">キーを削除</button></div>
 <main id="content">
-<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のアカウントの履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のAPI接続の履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
 <button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
-<h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">Microsoftアカウントでログインして、コードの相談を始めましょう。</p>
-<button id="login" class="primary">Microsoftでログイン</button></section>
+<h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。</p>
+<button id="login" class="primary">APIキーを登録</button></section>
 <div id="messages" role="log" aria-live="polite"></div>
 </main>
 <footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>

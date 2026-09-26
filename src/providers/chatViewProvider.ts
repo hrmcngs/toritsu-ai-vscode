@@ -120,7 +120,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (message.type === 'login') {
         if (this.signingIn) return;
         this.signingIn = true; this.error = ''; this.publish();
-        try { await this.auth.signIn(); }
+        try {
+          await this.auth.signIn();
+          if (this.auth.session) await vscode.commands.executeCommand('toritsuAI.setupConnection');
+        }
         finally { this.signingIn = false; }
         return;
       }
@@ -218,7 +221,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const id = typeof message.id === 'string' ? message.id : undefined;
         if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
         const confirmed = await vscode.window.showWarningMessage(
-          message.type === 'clear' ? 'このアカウントの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          message.type === 'clear' ? 'このAPI接続の履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
           { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
@@ -264,7 +267,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
         const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode }), controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-          throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
+          throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
         }
         const historyText = images.length ? `${text}\n\n[添付画像: ${images.map(image => image.name).join(', ')}。画像本体はこの送信のみに含まれます]` : text;
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';

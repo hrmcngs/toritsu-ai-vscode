@@ -2,7 +2,7 @@ import { Authentication } from './authService';
 import { LlmClient } from './llmClient';
 import { Message } from '../types/ai';
 
-// MicrosoftのトークンはAIサーバーへ送らない。接続先の認証は別のクライアントが担当。
+// APIキーの削除・変更や接続先変更で、進行中の処理と結果の適用を中止する。
 export class AuthenticatedClient implements LlmClient {
   constructor(private readonly auth: Authentication, private readonly client: LlmClient) {}
 
@@ -15,11 +15,11 @@ export class AuthenticatedClient implements LlmClient {
     if (signal?.aborted) cancel();
     try {
       if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-        throw new Error('ログイン状態の変更またはキャンセルにより、送信しませんでした。');
+        throw new Error('APIキー・接続先の変更またはキャンセルにより、送信しませんでした。');
       }
       const result = await this.client.complete(messages, controller.signal);
       if (controller.signal.aborted || this.auth.session?.key !== session.key) {
-        throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
+        throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
       }
       return result;
     } finally {

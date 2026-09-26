@@ -281,12 +281,12 @@
     for (const id of ['custom-model', 'configure-models']) el(id).disabled = state.busy || state.changingModel;
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
-    el('login').textContent = state.signingIn ? 'ログインを待っています…' : 'Microsoftでログイン';
+    el('login').textContent = state.signingIn ? 'APIキーを設定中…' : 'APIキーを登録';
     el('account-bar').hidden = !state.signedIn;
     el('welcome-title').textContent = state.signedIn ? '何から始めましょうか？' : '都立AIへようこそ';
     el('welcome-description').textContent = state.signedIn
       ? 'コードの説明、改善の相談、アイデアをここから。'
-      : 'Microsoftアカウントでログインして、コードの相談を始めましょう。';
+      : 'APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。';
     el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
     el('messages').hidden = state.showingHistory;
     el('messages').replaceChildren();

@@ -1,9 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { BrowserHandoff } from './services/browserHandoff';
 import { ConnectionSetup } from './services/connectionSetup';
 import { ModelSelection } from './services/modelSelection';
-import { setApiKey } from './commands/setApiKey';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
 import { openChat } from './commands/openChat';
@@ -16,7 +14,7 @@ import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const auth = new AuthService(context.globalState);
+  const auth = new AuthService(context.secrets);
   context.subscriptions.push(auth);
   await auth.restore();
   const transport = new ToritsuAiClient(() => {
@@ -49,22 +47,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return new ApprovedClient(approvals, transport).complete(messages, signal);
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await openChat(); throw error; }
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
-    ['toritsuAI.setupConnection', () => authorized(async () => { await setup.ensureConnection(); await models.select('custom'); })],
-    ['toritsuAI.setApiKey', () => setApiKey(context.secrets)],
+    ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(); await auth.restore(); await models.select('custom'); }],
+    ['toritsuAI.setApiKey', () => auth.signIn()],
     ['toritsuAI.explainCode', () => authorized(() => explainCode(client))],
     ['toritsuAI.editSelection', () => authorized(async () => {
       const session = await auth.requireSession();
       await editSelection(client, async (uri, code) => {
         await approvals.approveEdit(uri, code);
         if ((await auth.requireSession()).key !== session.key) {
-          throw new Error('ログインアカウントが変わったため、編集を適用しませんでした。');
+          throw new Error('APIキーまたは接続先が変わったため、編集を適用しませんでした。');
         }
       });
     })],
