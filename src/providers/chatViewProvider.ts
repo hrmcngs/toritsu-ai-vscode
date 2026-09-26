@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { BrowserHandoff, browserPrompt } from '../services/browserHandoff';
 import { LlmClient } from '../services/llmClient';
 import { collectContext } from '../services/contextCollector';
 import { chatPrompt } from '../services/promptBuilder';
@@ -19,7 +20,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private controller?: AbortController;
   private signingIn = false;
   private changingModel = false;
-  private readonly models = new ModelSelection();
+  private modelController?: AbortController;
   private readonly linkReader = new LinkReader();
   private sources: LinkSource[] = [];
   private loadingLinks = false;
@@ -38,7 +39,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly client: LlmClient,
     private readonly auth: AuthService,
     private readonly approvals: ApprovalService,
-    storage?: vscode.Memento
+    storage?: vscode.Memento,
+    private readonly models = new ModelSelection(),
+    private readonly browser?: BrowserHandoff
   ) {
     this.history = new ChatHistory(storage);
     this.history.setAccount(auth.session?.accountId);
@@ -49,6 +52,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }),
       auth.onDidChange(() => {
         this.controller?.abort();
+        this.modelController?.abort();
         this.history.setAccount(auth.session?.accountId);
         this.showingHistory = false;
         this.goal = ''; this.planMode = false;
@@ -74,7 +78,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private publish(clearInput = false): void {
     const session = this.auth.session;
     void this.view?.webview.postMessage({
-      type: 'state', messages: session ? this.history.messages : [],
+      type: 'state', browserMode: this.browser?.enabled ?? false, messages: session ? this.history.messages : [],
       recent: session ? this.history.recent : [],
       showingHistory: this.showingHistory, activeChatId: this.history.selectedId,
       busy: !!this.controller, signingIn: this.signingIn,
@@ -97,9 +101,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     try {
       if (message.type === 'selectModel') {
         if (this.controller || this.changingModel) return;
+        await this.auth.requireSession();
+        if (this.controller || this.changingModel) return;
+        this.modelController = new AbortController();
         this.changingModel = true; this.error = ''; this.publish();
-        try { await this.models.select(message.id); }
-        finally { this.changingModel = false; }
+        try { await this.models.select(message.id, this.modelController.signal); }
+        finally { this.changingModel = false; this.modelController = undefined; }
         return;
       }
       if (message.type === 'configureModels') {
@@ -119,9 +126,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
       if (message.type === 'logout') { await this.auth.signOut(); return; }
       if (message.type === 'settings') {
-        const choice = await vscode.window.showQuickPick(['APIのURL・モデルを設定', 'APIキーを設定'], { title: '都立AIの接続設定' });
+        const choice = await vscode.window.showQuickPick(['接続設定を始める', '詳細なAPI設定', 'APIキーを設定'], { title: '都立AIの接続設定' });
+        if (choice === '接続設定を始める') await vscode.commands.executeCommand('toritsuAI.setupConnection');
         if (choice === 'APIキーを設定') await vscode.commands.executeCommand('toritsuAI.setApiKey');
-        if (choice === 'APIのURL・モデルを設定') await vscode.commands.executeCommand('workbench.action.openSettings', 'toritsuAI');
+        if (choice === '詳細なAPI設定') await vscode.commands.executeCommand('workbench.action.openSettings', 'toritsuAI');
         return;
       }
       if (this.controller) return;
@@ -245,6 +253,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           throw new Error('全文を送るファイルをエディターで開いてください。');
         }
         const context = message.includeContext === true && editor ? collectContext(editor) : undefined;
+        if (this.browser?.enabled) {
+          const prompt = browserPrompt(this.history.messages, text, context, images, this.sources,
+            { files: this.files, goal: this.goal, planMode: this.planMode });
+          const copied = await this.browser.open(prompt, images.length > 0, controller.signal);
+          if (copied && !controller.signal.aborted && this.auth.session?.key === session.key) {
+            this.notice = '質問をコピーしました。ブラウザ版の都立AIに貼り付けて送信してください。画像はブラウザで再添付してください。';
+          }
+          return;
+        }
         const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode }), controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
           throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
@@ -275,6 +292,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   dispose(): void {
     this.controller?.abort();
+    this.modelController?.abort();
     [...this.subscriptions, ...this.viewSubscriptions].forEach(item => item.dispose());
   }
 }

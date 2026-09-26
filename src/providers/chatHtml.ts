@@ -27,7 +27,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="login" class="primary">Microsoftでログイン</button></section>
 <div id="messages" role="log" aria-live="polite"></div>
 </main>
-<footer><p id="status" role="status"></p><p id="error" role="alert"></p>
+<footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
 <div id="options-summary" class="options-summary" hidden></div>
 <div id="file-attachments" aria-label="添付ファイル"></div>
@@ -64,7 +64,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="model" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" title="モデルを変更">モデルを選択 ⌄</button>
 <div id="model-menu" class="model-menu" role="menu" aria-label="モデル選択" hidden>
 <div id="model-options"></div>
-<button id="custom-model" type="button" role="menuitem">モデルIDを直接入力…</button>
+<button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
 <button id="cancel" type="button" class="icon-button" title="生成を中止" aria-label="生成を中止" hidden>${icon('M6 6h12v12H6Z')}</button>

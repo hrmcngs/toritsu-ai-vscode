@@ -211,6 +211,9 @@
   window.addEventListener('message', event => {
     if (event.data.type !== 'state') return;
     state = event.data;
+    el('browser-help').hidden = !state.browserMode;
+    el('send').title = state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
+    el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
     el('options-summary').replaceChildren();
@@ -259,9 +262,9 @@
     }
     el('account').textContent = state.account;
     el('account').title = state.account;
-    el('model').textContent = `${state.modelSelection.label} ⌄`;
+    el('model').textContent = state.browserMode ? 'ブラウザで選択' : state.changingModel ? 'モデルを確認中…' : `${state.modelSelection.label} ⌄`;
     el('model').title = state.model || 'モデルを選択';
-    el('model').disabled = state.busy || state.changingModel;
+    el('model').disabled = state.browserMode || state.busy || state.changingModel;
     el('model-options').replaceChildren();
     for (const option of state.modelSelection.options) {
       const button = document.createElement('button');
@@ -271,7 +274,7 @@
       const label = document.createElement('span'); label.className = 'model-title';
       label.textContent = option.label + (option.selected ? ' ✓' : '');
       const detail = document.createElement('small');
-      detail.textContent = option.model ? `設定済み · ${option.model}` : 'モデルIDを設定して使用';
+      detail.textContent = option.model ? `設定済み · ${option.model}` : '一覧から選択して使用';
       button.append(label, detail); button.addEventListener('click', () => selectModel(option.id));
       el('model-options').append(button);
     }

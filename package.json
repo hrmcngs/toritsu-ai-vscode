@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -55,6 +55,10 @@
       {
         "command": "toritsuAI.showHistory",
         "title": "Toritsu AI: Show History"
+      },
+      {
+        "command": "toritsuAI.setupConnection",
+        "title": "Toritsu AI: Setup Connection"
       }
     ],
     "menus": {
@@ -143,6 +147,29 @@
           "default": "",
           "scope": "machine",
           "description": "推論モデルとして選択するAPIのモデルID。接続先で利用できる正確なIDを指定してください。"
+        },
+        "toritsuAI.modelsEndpoint": {
+          "type": "string",
+          "default": "/v1/models",
+          "scope": "machine",
+          "description": "モデル一覧APIのパス。OpenAI互換のGET /v1/models（data[].id）を使用します。"
+        },
+        "toritsuAI.connectionMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "browser",
+            "api"
+          ],
+          "default": "auto",
+          "scope": "machine",
+          "description": "auto: API接続先がなければブラウザへ質問をコピーして引き継ぎます。"
+        },
+        "toritsuAI.browserUrl": {
+          "type": "string",
+          "default": "https://ai.metro.tokyo.lg.jp/",
+          "scope": "machine",
+          "description": "質問を引き継ぐブラウザ版のURL。API接続先とは別です。"
         }
       }
     }

@@ -92,3 +92,14 @@ test('ファイル本文と目標を送信し、本文は履歴に保存せず�
   await provider.receive({ type: 'new' });
   assert.equal(state().goal, ''); assert.equal(state().planMode, false);
 });
+
+test('ブラウザ版への引き継ぎではAPIを呼ばず、下書きの添付を保持する', async t => {
+  let copied;
+  const { provider, state } = setup(t, async () => { throw new Error('API must not run'); });
+  provider.browser = { enabled: true, open: async prompt => { copied = prompt; return true; } };
+  provider.files = [{ id: 'one', name: 'main.ts', path: '/main.ts', text: 'const x = 1;' }];
+  await provider.receive({ type: 'send', text: 'このコードを説明して' });
+  assert.match(copied, /このコードを説明して/); assert.match(copied, /const x = 1/);
+  assert.equal(state().files.length, 1); assert.deepEqual(state().messages, []);
+  assert.equal(state().browserMode, true); assert.match(state().notice, /コピーしました/);
+});

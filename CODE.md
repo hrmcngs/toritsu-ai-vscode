@@ -9,7 +9,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -62,6 +62,10 @@
       {
         "command": "toritsuAI.showHistory",
         "title": "Toritsu AI: Show History"
+      },
+      {
+        "command": "toritsuAI.setupConnection",
+        "title": "Toritsu AI: Setup Connection"
       }
     ],
     "menus": {
@@ -150,6 +154,29 @@
           "default": "",
           "scope": "machine",
           "description": "推論モデルとして選択するAPIのモデルID。接続先で利用できる正確なIDを指定してください。"
+        },
+        "toritsuAI.modelsEndpoint": {
+          "type": "string",
+          "default": "/v1/models",
+          "scope": "machine",
+          "description": "モデル一覧APIのパス。OpenAI互換のGET /v1/models（data[].id）を使用します。"
+        },
+        "toritsuAI.connectionMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "browser",
+            "api"
+          ],
+          "default": "auto",
+          "scope": "machine",
+          "description": "auto: API接続先がなければブラウザへ質問をコピーして引き継ぎます。"
+        },
+        "toritsuAI.browserUrl": {
+          "type": "string",
+          "default": "https://ai.metro.tokyo.lg.jp/",
+          "scope": "machine",
+          "description": "質問を引き継ぐブラウザ版のURL。API接続先とは別です。"
         }
       }
     }
@@ -351,6 +378,10 @@ export async function setApiKey(secrets: vscode.SecretStorage): Promise<void> {
 
 ````typescript
 import * as vscode from 'vscode';
+import { ApiModelCatalog } from './services/modelCatalog';
+import { BrowserHandoff } from './services/browserHandoff';
+import { ConnectionSetup } from './services/connectionSetup';
+import { ModelSelection } from './services/modelSelection';
 import { setApiKey } from './commands/setApiKey';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
@@ -378,14 +409,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
   }, () => context.secrets.get(API_KEY_SECRET));
   const approvals = new ApprovalService();
-  const client: LlmClient = new AuthenticatedClient(auth, new ApprovedClient(approvals, transport));
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState);
+  const setup = new ConnectionSetup(context.secrets);
+  const catalog = new ApiModelCatalog(() => {
+    const config = vscode.workspace.getConfiguration('toritsuAI');
+    return { baseUrl: config.get<string>('baseUrl', ''), modelsEndpoint: config.get<string>('modelsEndpoint', '/v1/models'),
+      authHeader: config.get<string>('authHeader', 'Authorization'), apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer') };
+  }, () => context.secrets.get(API_KEY_SECRET));
+  const models = new ModelSelection(signal => catalog.listModels(signal), signal => setup.ensureConnection(signal));
+  const readyClient: LlmClient = { complete: async (messages, signal) => {
+    await setup.ensureConnection(signal);
+    if (!vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) {
+      await models.select('custom', signal);
+    }
+    if (signal?.aborted) throw new Error('送信をキャンセルしました。');
+    if (!vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) throw new Error('モデルを選択してから送信してください。');
+    return new ApprovedClient(approvals, transport).complete(messages, signal);
+  } };
+  const client: LlmClient = new AuthenticatedClient(auth, readyClient);
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await openChat(); throw error; }
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
+    ['toritsuAI.setupConnection', () => authorized(async () => { await setup.ensureConnection(); await models.select('custom'); })],
     ['toritsuAI.setApiKey', () => setApiKey(context.secrets)],
     ['toritsuAI.explainCode', () => authorized(() => explainCode(client))],
     ['toritsuAI.editSelection', () => authorized(async () => {
@@ -444,7 +492,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="login" class="primary">Microsoftでログイン</button></section>
 <div id="messages" role="log" aria-live="polite"></div>
 </main>
-<footer><p id="status" role="status"></p><p id="error" role="alert"></p>
+<footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
 <div id="options-summary" class="options-summary" hidden></div>
 <div id="file-attachments" aria-label="添付ファイル"></div>
@@ -481,7 +529,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="model" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" title="モデルを変更">モデルを選択 ⌄</button>
 <div id="model-menu" class="model-menu" role="menu" aria-label="モデル選択" hidden>
 <div id="model-options"></div>
-<button id="custom-model" type="button" role="menuitem">モデルIDを直接入力…</button>
+<button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
 <button id="cancel" type="button" class="icon-button" title="生成を中止" aria-label="生成を中止" hidden>${icon('M6 6h12v12H6Z')}</button>
@@ -497,6 +545,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 
 ````typescript
 import * as vscode from 'vscode';
+import { BrowserHandoff, browserPrompt } from '../services/browserHandoff';
 import { LlmClient } from '../services/llmClient';
 import { collectContext } from '../services/contextCollector';
 import { chatPrompt } from '../services/promptBuilder';
@@ -517,7 +566,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private controller?: AbortController;
   private signingIn = false;
   private changingModel = false;
-  private readonly models = new ModelSelection();
+  private modelController?: AbortController;
   private readonly linkReader = new LinkReader();
   private sources: LinkSource[] = [];
   private loadingLinks = false;
@@ -536,7 +585,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private readonly client: LlmClient,
     private readonly auth: AuthService,
     private readonly approvals: ApprovalService,
-    storage?: vscode.Memento
+    storage?: vscode.Memento,
+    private readonly models = new ModelSelection(),
+    private readonly browser?: BrowserHandoff
   ) {
     this.history = new ChatHistory(storage);
     this.history.setAccount(auth.session?.accountId);
@@ -547,6 +598,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }),
       auth.onDidChange(() => {
         this.controller?.abort();
+        this.modelController?.abort();
         this.history.setAccount(auth.session?.accountId);
         this.showingHistory = false;
         this.goal = ''; this.planMode = false;
@@ -572,7 +624,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private publish(clearInput = false): void {
     const session = this.auth.session;
     void this.view?.webview.postMessage({
-      type: 'state', messages: session ? this.history.messages : [],
+      type: 'state', browserMode: this.browser?.enabled ?? false, messages: session ? this.history.messages : [],
       recent: session ? this.history.recent : [],
       showingHistory: this.showingHistory, activeChatId: this.history.selectedId,
       busy: !!this.controller, signingIn: this.signingIn,
@@ -595,9 +647,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     try {
       if (message.type === 'selectModel') {
         if (this.controller || this.changingModel) return;
+        await this.auth.requireSession();
+        if (this.controller || this.changingModel) return;
+        this.modelController = new AbortController();
         this.changingModel = true; this.error = ''; this.publish();
-        try { await this.models.select(message.id); }
-        finally { this.changingModel = false; }
+        try { await this.models.select(message.id, this.modelController.signal); }
+        finally { this.changingModel = false; this.modelController = undefined; }
         return;
       }
       if (message.type === 'configureModels') {
@@ -617,9 +672,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
       if (message.type === 'logout') { await this.auth.signOut(); return; }
       if (message.type === 'settings') {
-        const choice = await vscode.window.showQuickPick(['APIのURL・モデルを設定', 'APIキーを設定'], { title: '都立AIの接続設定' });
+        const choice = await vscode.window.showQuickPick(['接続設定を始める', '詳細なAPI設定', 'APIキーを設定'], { title: '都立AIの接続設定' });
+        if (choice === '接続設定を始める') await vscode.commands.executeCommand('toritsuAI.setupConnection');
         if (choice === 'APIキーを設定') await vscode.commands.executeCommand('toritsuAI.setApiKey');
-        if (choice === 'APIのURL・モデルを設定') await vscode.commands.executeCommand('workbench.action.openSettings', 'toritsuAI');
+        if (choice === '詳細なAPI設定') await vscode.commands.executeCommand('workbench.action.openSettings', 'toritsuAI');
         return;
       }
       if (this.controller) return;
@@ -743,6 +799,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           throw new Error('全文を送るファイルをエディターで開いてください。');
         }
         const context = message.includeContext === true && editor ? collectContext(editor) : undefined;
+        if (this.browser?.enabled) {
+          const prompt = browserPrompt(this.history.messages, text, context, images, this.sources,
+            { files: this.files, goal: this.goal, planMode: this.planMode });
+          const copied = await this.browser.open(prompt, images.length > 0, controller.signal);
+          if (copied && !controller.signal.aborted && this.auth.session?.key === session.key) {
+            this.notice = '質問をコピーしました。ブラウザ版の都立AIに貼り付けて送信してください。画像はブラウザで再添付してください。';
+          }
+          return;
+        }
         const answer = await this.client.complete(chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode }), controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
           throw new Error('ログイン状態の変更またはキャンセルにより、結果を破棄しました。');
@@ -773,6 +838,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   dispose(): void {
     this.controller?.abort();
+    this.modelController?.abort();
     [...this.subscriptions, ...this.viewSubscriptions].forEach(item => item.dispose());
   }
 }
@@ -972,6 +1038,57 @@ export class AuthenticatedClient implements LlmClient {
 }
 ````
 
+## src/services/browserHandoff.ts
+
+````typescript
+import * as vscode from 'vscode';
+import { FileContext, ImageAttachment, Message } from '../types/ai';
+import { ChatOptions } from './promptBuilder';
+import { LinkSource } from './linkReader';
+
+export function browserPrompt(history: readonly Message[], text: string, context: FileContext | undefined,
+  images: readonly ImageAttachment[], sources: readonly LinkSource[], options: ChatOptions): string {
+  const parts = [text];
+  if (options.goal) parts.push(`目標:\n${options.goal}`);
+  if (options.planMode) parts.push('プランモード: 実装の前に、要件・変更対象・実装手順・検証方法を提案してください。');
+  if (history.length) parts.push('これまでの会話:\n' + history.filter(item => item.role !== 'system')
+    .map(item => `${item.role === 'user' ? '質問' : '回答'}: ${typeof item.content === 'string' ? item.content : '[画像付きメッセージ]'}`).join('\n\n'));
+  if (context) parts.push(`現在のファイル: ${context.filePath}\n言語: ${context.language}\n${context.fullText}\n選択範囲:\n${context.selectedText}`);
+  for (const file of options.files ?? []) parts.push(`添付ファイル: ${file.path}\n${file.text}`);
+  for (const source of sources) parts.push(`参考資料: ${source.title}\n${source.url}${source.truncated ? '\n（抜粋）' : ''}\n${source.text}`);
+  if (images.length) parts.push(`添付予定の画像（ブラウザで別途添付）: ${images.map(image => image.name).join(', ')}`);
+  return parts.join('\n\n---\n\n');
+}
+
+export class BrowserHandoff {
+  get enabled(): boolean {
+    const config = vscode.workspace.getConfiguration('toritsuAI');
+    const mode = config.get<string>('connectionMode', 'auto');
+    return mode === 'browser' || (mode === 'auto' && !config.get<string>('baseUrl', '').trim());
+  }
+
+  async open(prompt: string, hasImages: boolean, signal?: AbortSignal): Promise<boolean> {
+    const check = () => { if (signal?.aborted) throw new Error('ブラウザへの引き継ぎをキャンセルしました。'); };
+    check();
+    const address = vscode.workspace.getConfiguration('toritsuAI').get<string>('browserUrl', 'https://ai.metro.tokyo.lg.jp/');
+    let url: URL;
+    try {
+      url = new URL(address);
+      if (url.protocol !== 'https:' || url.username || url.password) throw new Error();
+    } catch { throw new Error('ブラウザ版のURLにはHTTPSのURLを設定してください。'); }
+    const accepted = await vscode.window.showInformationMessage('質問と添付したコードをコピーして、ブラウザ版の都立AIを開きますか？', {
+      modal: true, detail: `開くページ: ${url.href}\nブラウザで貼り付けて送信してください。回答はブラウザで確認します。${hasImages ? '\n画像・スケッチはブラウザで再添付が必要です。' : ''}`
+    }, 'コピーして開く');
+    check();
+    if (accepted !== 'コピーして開く') return false;
+    await vscode.env.clipboard.writeText(prompt);
+    check();
+    if (!await vscode.env.openExternal(vscode.Uri.parse(url.href))) throw new Error('質問はコピーしましたが、ブラウザを開けませんでした。ブラウザ版を開いて貼り付けてください。');
+    return true;
+  }
+}
+````
+
 ## src/services/chatHistory.ts
 
 ````typescript
@@ -1065,6 +1182,67 @@ export class ChatHistory {
   remove(id: string): void {
     this.conversations = this.conversations.filter(chat => chat.id !== id);
     if (this.activeId === id) this.activeId = undefined;
+  }
+}
+````
+
+## src/services/connectionSetup.ts
+
+````typescript
+import * as vscode from 'vscode';
+import { API_KEY_SECRET } from './toritsuAiClient';
+
+export class ConnectionSetup {
+  private active = false;
+  constructor(private readonly secrets: vscode.SecretStorage) {}
+
+  async ensureConnection(signal?: AbortSignal): Promise<void> {
+    if (this.active) throw new Error('接続設定の画面が開いています。設定完了後に再実行してください。');
+    this.active = true;
+    const cancellation = new vscode.CancellationTokenSource();
+    const cancel = () => cancellation.cancel();
+    signal?.addEventListener('abort', cancel, { once: true });
+    const check = () => { if (signal?.aborted) throw new Error('接続設定をキャンセルしました。'); };
+    try {
+      check();
+      const config = vscode.workspace.getConfiguration('toritsuAI');
+      if (!config.get<string>('baseUrl', '').trim()) {
+        const choice = await vscode.window.showQuickPick([
+          { label: 'APIの接続先URLを設定する', id: 'api', description: '学校・管理者・API提供元から案内されたURLを使います' },
+          { label: 'APIの接続先が分からない', id: 'unknown', description: 'ブラウザ版のURLとは別の接続情報が必要です' }
+        ], { title: '都立AIの初回接続設定', ignoreFocusOut: true }, cancellation.token);
+        check();
+        if (!choice) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+        if (choice.id === 'unknown') throw new Error('拡張から利用するには管理者・提供元のAPI接続先とキーが必要です。ブラウザ版のログインだけでは接続できません。');
+        const url = await vscode.window.showInputBox({ title: 'APIの接続先URL',
+          prompt: '管理者・提供元から案内されたAPIのルートURLを入力してください。モデルIDは後で一覧から選べます。',
+          ignoreFocusOut: true, validateInput: value => {
+            try {
+              const parsed = new URL(value.trim());
+              const local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+              if (parsed.username || parsed.password || parsed.search || parsed.hash ||
+                (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && local))) throw new Error();
+              return undefined;
+            } catch { return 'HTTPSのAPIルートURLを入力してください（ローカルのみHTTP可）。'; }
+          }
+        }, cancellation.token);
+        check();
+        if (!url?.trim()) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+        await config.update('baseUrl', url.trim(), vscode.ConfigurationTarget.Global);
+      }
+      check();
+      if (!await this.secrets.get(API_KEY_SECRET)) {
+        check();
+        const key = await vscode.window.showInputBox({ title: 'APIキーの登録', password: true,
+          prompt: 'APIキーを入力してください。VS CodeのSecretStorageに保存します。', ignoreFocusOut: true,
+          validateInput: value => value.trim() ? undefined : 'APIキーを入力してください。'
+        }, cancellation.token);
+        check();
+        if (!key?.trim()) throw new Error('APIキーの登録をキャンセルしました。入力内容は残っています。');
+        await this.secrets.store(API_KEY_SECRET, key.trim());
+      }
+      check();
+    } finally { this.active = false; signal?.removeEventListener('abort', cancel); cancellation.dispose(); }
   }
 }
 ````
@@ -1472,6 +1650,81 @@ export interface LlmClient {
 }
 ````
 
+## src/services/modelCatalog.ts
+
+````typescript
+export interface ModelCatalogConfig {
+  baseUrl: string;
+  modelsEndpoint: string;
+  authHeader: string;
+  apiKeyPrefix: string;
+}
+
+export interface ModelCatalog { listModels(signal?: AbortSignal): Promise<string[]> }
+
+/** OpenAI-compatible adapter; replace this when the Toritsu model-list specification is available. */
+export class ApiModelCatalog implements ModelCatalog {
+  constructor(private readonly getConfig: () => ModelCatalogConfig,
+    private readonly getApiKey: () => PromiseLike<string | undefined>) {}
+
+  async listModels(signal?: AbortSignal): Promise<string[]> {
+    const config = this.getConfig();
+    if (!config.baseUrl.trim()) throw new Error('接続先が未設定です。「接続設定」でAPIのURLを設定してください。');
+    let url: URL;
+    try {
+      url = new URL(config.baseUrl.trim());
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      const path = config.modelsEndpoint.trim();
+      if (url.search || url.hash || url.username || url.password
+        || (url.protocol !== 'https:' && !(url.protocol === 'http:' && local))
+        || !path.startsWith('/') || path.startsWith('//') || /[?#\\]/.test(path)) throw new Error();
+      url.pathname = url.pathname.replace(/\/+$/, '') + path;
+    } catch { throw new Error('モデル一覧のURLが不正です。HTTPSのbaseUrlと / から始まるmodelsEndpointを設定してください。'); }
+    const key = await this.getApiKey();
+    if (!key) throw new Error('APIキーを先に登録してください（Toritsu AI: Set API Key）。');
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const timer = setTimeout(cancel, 15000);
+    try {
+      const headers = new Headers({ Accept: 'application/json' });
+      headers.set(config.authHeader, [config.apiKeyPrefix.trim(), key].filter(Boolean).join(' '));
+      const response = await fetch(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`モデル一覧を取得できません（HTTP ${response.status}）。接続先の一覧API・認証設定を確認してください。`);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('モデル一覧が空です。');
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1024 * 1024) throw new Error('モデル一覧の応答が大きすぎます。');
+          chunks.push(value);
+        }
+      } finally { await reader.cancel(); reader.releaseLock(); }
+      const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const data = (body as { data?: unknown } | null)?.data;
+      if (!Array.isArray(data)) throw new Error('モデル一覧の形式が未対応です。接続先の一覧APIを確認してください。');
+      const ids = data.slice(0, 2000).map((item: unknown) => (item as { id?: unknown } | null)?.id)
+        .filter((id): id is string => typeof id === 'string' && !!id.trim() && id.length <= 256 && !/[\r\n\x00]/.test(id));
+      if (!ids.length) throw new Error('利用できるモデルが一覧にありません。接続先の利用権限を確認してください。');
+      if (controller.signal.aborted) throw new Error('モデル一覧の取得を中止しました。');
+      return [...new Set(ids)].sort();
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : 'モデル一覧の取得がタイムアウトしました。');
+      if (error instanceof Error && /^(モデル|利用できる)/.test(error.message)) throw error;
+      throw new Error('モデル一覧に接続できませんでした。接続設定と一覧APIの対応状況を確認してください。');
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
+  }
+}
+````
+
 ## src/services/modelSelection.ts
 
 ````typescript
@@ -1483,6 +1736,8 @@ const presets = [
 ] as const;
 
 export class ModelSelection {
+  constructor(private readonly listModels: (signal?: AbortSignal) => Promise<string[]> = async () => [],
+    private readonly prepare: (signal?: AbortSignal) => Promise<void> = async () => {}) {}
   get state() {
     const config = vscode.workspace.getConfiguration('toritsuAI');
     const current = config.get<string>('model', '').trim();
@@ -1493,22 +1748,47 @@ export class ModelSelection {
     return { current, label: options.find(option => option.selected)?.label ?? (current || 'モデルを選択'), options };
   }
 
-  async select(id: unknown): Promise<void> {
+  async select(id: unknown, signal?: AbortSignal): Promise<void> {
     const preset = presets.find(item => item.id === id);
     if (!preset && id !== 'custom') throw new Error('不正なモデル選択です。');
+    await this.prepare(signal);
+    if (signal?.aborted) return;
     const config = vscode.workspace.getConfiguration('toritsuAI');
+    const baseUrl = config.get<string>('baseUrl', '');
     let model = preset ? config.get<string>(preset.setting, '').trim() : '';
     if (!model) {
-      const value = await vscode.window.showInputBox({
-        title: preset ? `${preset.label}のモデルID` : '使用するモデルID',
-        prompt: '都立AIの接続先で利用できる正確なモデルIDを入力してください。',
-        value: preset ? '' : config.get<string>('model', ''), ignoreFocusOut: true,
-        validateInput: value => value.trim() ? undefined : 'モデルIDを入力してください。'
-      });
-      if (!value?.trim()) return;
-      model = value.trim();
+      const existing = ['model', ...presets.map(item => item.setting)]
+        .map(key => config.get<string>(key, '').trim()).filter(Boolean);
+      let available: string[];
+      let unavailable = false;
+      try { available = await this.listModels(signal); }
+      catch (error) {
+        if (signal?.aborted || !existing.length) throw error;
+        available = []; unavailable = true;
+      }
+      if (signal?.aborted) return;
+      const models = [...new Set([...available, ...existing])];
+      if (!models.length) throw new Error('モデル一覧を取得できません。接続設定を確認してください。');
+      const cancellation = new vscode.CancellationTokenSource();
+      const cancel = () => cancellation.cancel();
+      signal?.addEventListener('abort', cancel, { once: true });
+      let choice: { label: string; model: string } | undefined;
+      try {
+        choice = await vscode.window.showQuickPick(models.map(model => ({ label: model, model,
+          description: available.includes(model) ? '接続先のモデル一覧' : '登録済み（利用可否は未確認）' })), {
+          title: preset ? `${preset.label}として使うモデルを選択` : '使用するモデルを選択',
+          placeHolder: unavailable ? '一覧を取得できないため登録済みモデルを表示しています' : 'クリックして選択してください（IDの入力は不要です）',
+          ignoreFocusOut: true
+        }, cancellation.token);
+      } finally { signal?.removeEventListener('abort', cancel); cancellation.dispose(); }
+      if (!choice || signal?.aborted) return;
+      if (vscode.workspace.getConfiguration('toritsuAI').get<string>('baseUrl', '') !== baseUrl) {
+        throw new Error('接続先が変更されたため、モデル一覧を開き直してください。');
+      }
+      model = choice.model;
       if (preset) await config.update(preset.setting, model, vscode.ConfigurationTarget.Global);
     }
+    if (signal?.aborted) return;
     await config.update('model', model, vscode.ConfigurationTarget.Global);
   }
 }
@@ -2036,6 +2316,9 @@ button:disabled { opacity: .4; cursor: default; }
   window.addEventListener('message', event => {
     if (event.data.type !== 'state') return;
     state = event.data;
+    el('browser-help').hidden = !state.browserMode;
+    el('send').title = state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
+    el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
     el('options-summary').replaceChildren();
@@ -2084,9 +2367,9 @@ button:disabled { opacity: .4; cursor: default; }
     }
     el('account').textContent = state.account;
     el('account').title = state.account;
-    el('model').textContent = `${state.modelSelection.label} ⌄`;
+    el('model').textContent = state.browserMode ? 'ブラウザで選択' : state.changingModel ? 'モデルを確認中…' : `${state.modelSelection.label} ⌄`;
     el('model').title = state.model || 'モデルを選択';
-    el('model').disabled = state.busy || state.changingModel;
+    el('model').disabled = state.browserMode || state.busy || state.changingModel;
     el('model-options').replaceChildren();
     for (const option of state.modelSelection.options) {
       const button = document.createElement('button');
@@ -2096,7 +2379,7 @@ button:disabled { opacity: .4; cursor: default; }
       const label = document.createElement('span'); label.className = 'model-title';
       label.textContent = option.label + (option.selected ? ' ✓' : '');
       const detail = document.createElement('small');
-      detail.textContent = option.model ? `設定済み · ${option.model}` : 'モデルIDを設定して使用';
+      detail.textContent = option.model ? `設定済み · ${option.model}` : '一覧から選択して使用';
       button.append(label, detail); button.addEventListener('click', () => selectModel(option.id));
       el('model-options').append(button);
     }
@@ -2362,6 +2645,56 @@ test('ログインのキャンセルでは利用可能にならない', async t 
 });
 ````
 
+## test/browserHandoff.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const Module = require('node:module');
+let config = {}, copied, opened, decision;
+const original = Module._load;
+Module._load = function(name, ...args) {
+  if (name === 'vscode') return {
+    workspace: { getConfiguration: () => ({ get: (key, fallback) => config[key] ?? fallback }) },
+    window: { showInformationMessage: async () => decision },
+    Uri: { parse: value => value },
+    env: { clipboard: { writeText: async value => { copied = value; } }, openExternal: async value => { opened = value; return true; } }
+  };
+  return original.call(this, name, ...args);
+};
+const { BrowserHandoff, browserPrompt } = require('../dist/services/browserHandoff');
+Module._load = original;
+
+test('API未設定ではブラウザモード、API設定済みではAPIモードになる', () => {
+  const handoff = new BrowserHandoff(); config = {}; assert.equal(handoff.enabled, true);
+  config = { baseUrl: 'https://api.example.com' }; assert.equal(handoff.enabled, false);
+  config.connectionMode = 'browser'; assert.equal(handoff.enabled, true);
+});
+
+test('明示的な操作後だけコピーしてブラウザを開く', async () => {
+  config = {}; copied = opened = undefined; decision = undefined;
+  const handoff = new BrowserHandoff(); assert.equal(await handoff.open('質問', false), false);
+  assert.equal(copied, undefined); assert.equal(opened, undefined);
+  decision = 'コピーして開く'; assert.equal(await handoff.open('質問', false), true);
+  assert.equal(copied, '質問'); assert.equal(opened, 'https://ai.metro.tokyo.lg.jp/');
+});
+
+test('質問・コード・目標を引き継ぎ、画像本体はクリップボードに含めない', () => {
+  const prompt = browserPrompt([], '作成して', undefined, [{ name: 'image.png', dataUrl: 'PRIVATE_IMAGE_BYTES' }], [],
+    { files: [{ name: 'main.ts', path: '/main.ts', text: 'const x = 1;' }], goal: '目標', planMode: true });
+  assert.match(prompt, /作成して/); assert.match(prompt, /const x = 1/); assert.match(prompt, /目標/);
+  assert.match(prompt, /ブラウザで別途添付/); assert.doesNotMatch(prompt, /PRIVATE_IMAGE_BYTES/);
+});
+
+test('キャンセル済み・不正なブラウザURLでは操作しない', async () => {
+  copied = opened = undefined; const controller = new AbortController(); controller.abort();
+  await assert.rejects(new BrowserHandoff().open('質問', false, controller.signal), /キャンセル/);
+  config = { browserUrl: 'file:///tmp/private' };
+  await assert.rejects(new BrowserHandoff().open('質問', false), /HTTPS/);
+  assert.equal(copied, undefined); assert.equal(opened, undefined);
+});
+````
+
 ## test/client.test.cjs
 
 ````javascript
@@ -2464,6 +2797,43 @@ test('説明対象の選択と編集コンテキスト、チャット履歴', ()
   const messages = chatPrompt(history, '次の質問', context);
   assert.deepEqual(messages.slice(1, 3), history);
   assert.deepEqual(JSON.parse(messages[3].content).context, context);
+});
+````
+
+## test/connectionSetup.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const Module = require('node:module');
+let config, choice, inputs, prompts;
+const original = Module._load;
+Module._load = function(name, ...args) {
+  if (name === 'vscode') return {
+    ConfigurationTarget: { Global: 1 }, CancellationTokenSource: class { token = {}; cancel() {} dispose() {} },
+    workspace: { getConfiguration: () => ({ get: (key, fallback) => config[key] ?? fallback, update: async (key,value) => { config[key] = value; } }) },
+    window: { showQuickPick: async () => choice, showInputBox: async () => { prompts++; return inputs.shift(); } }
+  };
+  return original.call(this, name, ...args);
+};
+const { ConnectionSetup } = require('../dist/services/connectionSetup');
+Module._load = original;
+
+test('接続済みなら入力せず、未設定ならURLとキーを別々に保存する', async () => {
+  config = { baseUrl: 'https://example.com' }; prompts = 0;
+  let key = 'existing'; const secrets = { get: async () => key, store: async (_name,value) => { key = value; } };
+  const setup = new ConnectionSetup(secrets); await setup.ensureConnection(); assert.equal(prompts, 0);
+  config = {}; key = undefined; choice = { id: 'api' }; inputs = ['https://api.example.com', 'dummy-key'];
+  await setup.ensureConnection(); assert.equal(config.baseUrl, 'https://api.example.com'); assert.equal(key, 'dummy-key');
+  assert.equal(config.apiKey, undefined);
+});
+
+test('接続先不明・キャンセルでは接続先を勝手に設定しない', async () => {
+  config = {}; choice = { id: 'unknown' };
+  const setup = new ConnectionSetup({ get: async () => undefined, store: async () => { throw new Error('must not store'); } });
+  await assert.rejects(setup.ensureConnection(), /管理者/); assert.deepEqual(config, {});
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(setup.ensureConnection(controller.signal), /キャンセル/);
 });
 ````
 
@@ -2827,6 +3197,17 @@ test('ファイル本文と目標を送信し、本文は履歴に保存せず�
   await provider.receive({ type: 'new' });
   assert.equal(state().goal, ''); assert.equal(state().planMode, false);
 });
+
+test('ブラウザ版への引き継ぎではAPIを呼ばず、下書きの添付を保持する', async t => {
+  let copied;
+  const { provider, state } = setup(t, async () => { throw new Error('API must not run'); });
+  provider.browser = { enabled: true, open: async prompt => { copied = prompt; return true; } };
+  provider.files = [{ id: 'one', name: 'main.ts', path: '/main.ts', text: 'const x = 1;' }];
+  await provider.receive({ type: 'send', text: 'このコードを説明して' });
+  assert.match(copied, /このコードを説明して/); assert.match(copied, /const x = 1/);
+  assert.equal(state().files.length, 1); assert.deepEqual(state().messages, []);
+  assert.equal(state().browserMode, true); assert.match(state().notice, /コピーしました/);
+});
 ````
 
 ## test/links.test.cjs
@@ -2926,6 +3307,60 @@ test('キャンセル済みの読み込みではHTTP接続しない', async t =>
 });
 ````
 
+## test/modelCatalog.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { ApiModelCatalog } = require('../dist/services/modelCatalog');
+const config = { baseUrl: 'https://example.com/api', modelsEndpoint: '/v1/models', authHeader: 'Authorization', apiKeyPrefix: 'Bearer' };
+const catalog = (overrides = {}, key = 'dummy-key') => new ApiModelCatalog(() => ({ ...config, ...overrides }), async () => key);
+
+test('GETのモデル一覧を既存の認証設定で取得して重複を除く', async t => {
+  t.mock.method(global, 'fetch', async (url, options) => {
+    assert.equal(url.href, 'https://example.com/api/v1/models'); assert.equal(options.method, 'GET');
+    assert.equal(options.headers.get('Authorization'), 'Bearer dummy-key'); assert.equal(options.redirect, 'error');
+    assert.equal(options.body, undefined);
+    return Response.json({ data: [{ id: 'fast-id' }, { id: 'reason-id' }, { id: 'fast-id' }, { id: '' }, {}] });
+  });
+  assert.deepEqual(await catalog().listModels(), ['fast-id', 'reason-id']);
+});
+
+test('独自一覧パス・認証ヘッダーを使える', async t => {
+  t.mock.method(global, 'fetch', async (url, options) => {
+    assert.equal(url.pathname, '/api/models'); assert.equal(options.headers.get('X-API-Key'), 'dummy-key');
+    return Response.json({ data: [{ id: 'model-id' }] });
+  });
+  await catalog({ modelsEndpoint: '/models', authHeader: 'X-API-Key', apiKeyPrefix: '' }).listModels();
+});
+
+test('キー未登録・不正な接続先では通信しない', async t => {
+  t.mock.method(global, 'fetch', () => { throw new Error('must not send'); });
+  await assert.rejects(catalog({}, '').listModels(), /APIキー/);
+  await assert.rejects(catalog({ baseUrl: '' }).listModels(), /未設定/);
+  await assert.rejects(catalog({ baseUrl: 'http://example.com' }).listModels(), /不正/);
+  await assert.rejects(catalog({ modelsEndpoint: '//other.example' }).listModels(), /不正/);
+});
+
+test('空一覧・異常形式・過大応答・HTTPエラーを扱う', async t => {
+  let response;
+  t.mock.method(global, 'fetch', async () => response);
+  response = new Response('SECRET_DETAIL', { status: 404 });
+  await assert.rejects(catalog().listModels(), error => /404/.test(error.message) && !/SECRET/.test(error.message));
+  response = Response.json({ data: [] }); await assert.rejects(catalog().listModels(), /一覧にありません/);
+  response = Response.json({ wrong: [] }); await assert.rejects(catalog().listModels(), /形式/);
+  response = new Response('a'.repeat(1024 * 1024 + 1)); await assert.rejects(catalog().listModels(), /大きすぎ/);
+});
+
+test('取得中のキャンセルを伝播する', async t => {
+  const controller = new AbortController();
+  t.mock.method(global, 'fetch', async (_url, options) => {
+    controller.abort(); assert.equal(options.signal.aborted, true); throw new Error('abort');
+  });
+  await assert.rejects(catalog().listModels(controller.signal), /キャンセル/);
+});
+````
+
 ## test/models.test.cjs
 
 ````javascript
@@ -2935,15 +3370,18 @@ const Module = require('node:module');
 let config;
 let input;
 let prompts;
+let shown;
 const original = Module._load;
 Module._load = function (name, ...args) {
   if (name === 'vscode') return {
     ConfigurationTarget: { Global: 1 },
+    CancellationTokenSource: class { token = {}; cancel() {} dispose() {} },
     workspace: { getConfiguration: () => ({
       get: (key, fallback) => config[key] ?? fallback,
       update: async (key, value, target) => { assert.equal(target, 1); config[key] = value; }
     }) },
-    window: { showInputBox: async () => { prompts++; return input; } }
+    window: { showInputBox: async () => { throw new Error('モデルIDの入力は禁止'); },
+      showQuickPick: async items => { prompts++; shown = items; return items.find(item => item.model === input); } }
   };
   return original.call(this, name, ...args);
 };
@@ -2967,21 +3405,37 @@ test('切り替えたモデルIDが次のAPIリクエストに反映される', 
   assert.deepEqual(requested, ['fast-id', 'reason-id']); assert.equal(prompts, 0);
 });
 
-test('未設定のプリセットは入力して登録。キャンセルでは設定を変更しない', async () => {
+test('未設定プリセットは一覧から選択し、キャンセルでは変更しない', async () => {
   config = { model: 'original' }; prompts = 0; input = undefined;
-  const models = new ModelSelection();
-  assert.equal(models.state.options[0].model, '');
+  const models = new ModelSelection(async () => ['actual-fast-id']);
   await models.select('fast'); assert.deepEqual(config, { model: 'original' });
-  input = '  actual-fast-id  '; await models.select('fast');
+  input = 'actual-fast-id'; await models.select('fast');
   assert.equal(config.fastModel, 'actual-fast-id'); assert.equal(config.model, 'actual-fast-id');
+  assert.deepEqual(shown.map(item => item.model), ['actual-fast-id', 'original']);
 });
 
-test('カスタムモデルを設定でき、不正な選択IDは拒否', async () => {
+test('一覧から任意のモデルを選べて、不正な選択IDは拒否する', async () => {
   config = {}; input = 'custom-id'; prompts = 0;
-  const models = new ModelSelection();
+  const models = new ModelSelection(async () => ['custom-id']);
   await models.select('custom'); assert.equal(models.state.label, 'custom-id');
   await assert.rejects(models.select('unknown'), /不正/);
   assert.equal(config.model, 'custom-id');
+});
+
+test('一覧非対応時は登録済みだけを選べる。登録がなければエラーを表示', async () => {
+  config = { fastModel: 'saved-id' }; input = 'saved-id';
+  const models = new ModelSelection(async () => { throw new Error('一覧非対応'); });
+  await models.select('custom'); assert.equal(config.model, 'saved-id');
+  assert.match(shown[0].description, /未確認/);
+  config = {}; await assert.rejects(models.select('custom'), /一覧非対応/);
+});
+
+test('ログアウトなどによる取得中断時はモデルを変更しない', async () => {
+  config = { model: 'original' }; input = 'new-id'; prompts = 0;
+  const controller = new AbortController();
+  const models = new ModelSelection(async () => { controller.abort(); return ['new-id']; });
+  await models.select('custom', controller.signal);
+  assert.equal(config.model, 'original'); assert.equal(prompts, 0);
 });
 ````
 
@@ -3100,13 +3554,13 @@ exports.run = async function () {
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -5708,14 +6162,15 @@ PDF解析は専用の子プロセスで行い、解析開始から15秒を超え
 ## モデルの切り替え
 
 入力欄右下のモデル名をクリックし、「高速モデル」「推論モデル」を選びます。
-初回は接続先で利用できる正確なモデルIDを入力してください。一度登録すると次回からクリックだけで切り替わります。
+初回は接続先のモデル一覧を取得し、選択画面を表示します。IDの手入力は不要です。一度登録すると次回からクリックだけで切り替わります。
 高速モデルは `toritsuAI.fastModel`、推論モデルは `toritsuAI.reasoningModel`、現在使用するIDは
 `toritsuAI.model` に保存します。チャット・説明・編集の次のリクエストから適用されます。
 送信中はメニューから変更できません。
 
-「モデルIDを直接入力…」で任意のモデルに変更できます。「モデル設定を開く…」から登録済みIDも変更できます。
+「利用可能なモデルから選ぶ…」で一覧を再取得してモデルを変更できます。「モデル設定を開く…」から接続設定も変更できます。
 「設定済み」はモデルIDが登録された状態を表し、APIでの利用権限・画像対応・推論機能を保証するものではありません。
-モデルIDや利用権限は都立AIの管理者・API仕様で確認してください。
+一覧の取得にはAPIの接続先とキーの設定が必要です。既定は `GET /v1/models`、応答は `{ "data": [{ "id": "モデルID" }] }` を想定します。パスは `toritsuAI.modelsEndpoint` で変更できます。都立AI固有の一覧API仕様は未確定です。
+一覧が取得できない場合は登録済みモデルだけを表示し、登録もなければエラーを表示します。モデルIDの入力画面へは戻りません。名前から高速・推論の能力を推測せず、利用者が各プリセットへ割り当てます。
 
 ## 画像の添付
 
@@ -5853,6 +6308,17 @@ VS Code APIの参照: https://code.visualstudio.com/api/references/vscode-api
 ファイルは最大20件・1件100KiB・合計8万文字。フォルダーは深さ5階層・最大500項目を調べ、隠しファイル、依存・ビルドフォルダー、ロックファイル、シンボリックリンク、バイナリなどを除外します。省略があれば画面に表示します。未保存の編集ではなくディスク上の内容を読みます。
 ファイル本文は今回の送信のみで、送信成功後は添付から外れ、履歴にはファイル名を残します。質問・回答に引用された内容は履歴に残ります。
 目標・プラン設定は新規チャット、履歴切替、ログアウトで解除されます。外部プラグイン連携は今回の追加対象に含みません。
+
+## ブラウザ版だけを利用している場合
+
+APIの接続先が未設定なら、自動でブラウザ版モードになります。APIキー・モデルIDは不要です。
+質問と必要なファイルを準備し、入力欄の送信ボタンから「コピーして開く」を選ぶと、質問・会話履歴・選択したコードや資料をクリップボードにコピーし、都立AIのWebサイトを開きます。
+ブラウザでログインし、貼り付けて送信してください。モデルの選択と回答の確認もブラウザ側で行います。
+画像・スケッチはブラウザで別途添付してください。自動送信・ブラウザのログイン共有・回答の自動取り込みには対応しません。下書きと添付は拡張に残し、ブラウザの回答を履歴に保存したようには扱いません。
+開くページは `toritsuAI.browserUrl`（既定 `https://ai.metro.tokyo.lg.jp/`）で変更できます。`toritsuAI.connectionMode` を `browser` にすると、API設定があってもブラウザ版モードを使えます。
+
+APIによる拡張内チャットを使うには、管理者・提供元から案内されたAPIのURLとキーが必要です。ブラウザ版のURL・Microsoftログインはその代わりにはなりません。
+`Toritsu AI: Setup Connection` または設定ボタンの「接続設定を始める」で設定できます。API接続時にモデルが未設定なら一覧から選択します。一覧API非対応時には利用可能なIDを自動判定できません。
 ````
 
 ## 起動方法
