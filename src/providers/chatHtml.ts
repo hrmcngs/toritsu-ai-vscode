@@ -21,7 +21,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 </div></header>
 <div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="保存したAPIキーを削除">キーを削除</button></div>
 <main id="content">
-<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のAPI接続の履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">このPCの都立AIに保存した履歴です。APIキーやアカウントを変えても引き継がれます。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
 <button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
 <h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。</p>

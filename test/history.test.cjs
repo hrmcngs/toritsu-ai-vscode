@@ -29,20 +29,20 @@ test('直近10チャットまで保持し、消去後は会話を再表示でき
 
 function storage() {
   const data = new Map();
-  return { data, get: key => data.get(key), update: async (key, value) => { data.set(key, structuredClone(value)); } };
+  return { data, keys: () => [...data.keys()], get: key => data.get(key), update: async (key, value) => { data.set(key, structuredClone(value)); } };
 }
 
-test('再起動後も同じアカウントの履歴を復元し、別アカウントと分離する', async () => {
+test('再起動・APIキー削除・別アカウントでも同じPCの履歴を復元する', async () => {
   const state = storage();
   const history = new ChatHistory(state);
   history.setAccount('account-a'); history.append('保存する質問', '保存する回答'); await history.save();
   const id = history.recent[0].id;
   history.setAccount(undefined); assert.deepEqual(history.recent, []);
-  history.setAccount('account-b'); assert.deepEqual(history.recent, []);
+  history.setAccount('account-b'); assert.equal(history.recent[0].id, id);
   history.append('Bの質問', 'Bの回答'); await history.save();
   const restored = new ChatHistory(state); restored.setAccount('account-a'); restored.select(id);
   assert.equal(restored.messages[0].content, '保存する質問');
-  assert.equal(restored.recent.length, 1);
+  assert.equal(restored.recent.length, 2);
 });
 
 test('個別削除と全削除を保存し、削除した会話は復元しない', async () => {
@@ -56,16 +56,16 @@ test('個別削除と全削除を保存し、削除した会話は復元しな�
   restored.clear(); await restored.save(); history.setAccount('a'); assert.deepEqual(history.recent, []);
 });
 
-test('保存途中のログアウト・アカウント変更でも保存先が混ざらない', async () => {
+test('保存途中のキー削除・アカウント変更でも共有履歴を失わない', async () => {
   const state = storage(); let release;
   const write = state.update;
   state.update = async (...args) => { await new Promise(resolve => { release = resolve; }); await write(...args); };
   const history = new ChatHistory(state); history.setAccount('a'); history.append('A only', 'reply');
-  const saving = history.save(); history.setAccount('b'); assert.deepEqual(history.recent, []);
+  const saving = history.save(); history.setAccount('b'); assert.equal(history.recent[0].title, 'A only');
   history.setAccount('a'); assert.equal(history.recent[0].title, 'A only');
   while (!release) await new Promise(resolve => setImmediate(resolve));
   release(); await saving;
-  history.setAccount('b'); assert.deepEqual(history.recent, []);
+  history.setAccount('b'); assert.equal(history.recent[0].title, 'A only');
 });
 
 test('保存失敗を通知し、不正な保存データを採用しない', async () => {
@@ -88,4 +88,20 @@ test('入力履歴は補足情報を含まない原文を復元し、API向け�
   const restored = new ChatHistory(storage); restored.setAccount('input-history'); restored.select(restored.recent[0].id);
   assert.deepEqual(restored.inputHistory, ['  質問  ']);
   restored.startNew(); assert.deepEqual(restored.inputHistory, []);
+});
+
+test('過去のアカウント別履歴を統合し、削除後は古いデータを再表示しない', async () => {
+  const { LOCAL_HISTORY_KEY } = require('../dist/services/chatHistory');
+  const state = storage();
+  const chat = (id, updatedAt, title) => ({ id, title, updatedAt, messages: [{ role: 'user', content: title }, { role: 'assistant', content: 'reply' }] });
+  state.data.set('toritsuAI.history.v1.old-a', [chat('a', 1, 'A'), chat('same', 2, 'old')]);
+  state.data.set('toritsuAI.history.v1.old-b', [chat('b', 4, 'B'), chat('same', 5, 'new')]);
+  state.data.set('unrelated', [chat('private', 100, 'unrelated')]);
+  const history = new ChatHistory(state); history.setAccount('new-key');
+  assert.deepEqual(history.recent.map(chat => chat.title), ['new', 'B', 'A']);
+  await history.save();
+  assert.equal(state.data.get(LOCAL_HISTORY_KEY).length, 3);
+  history.clear(); await history.save();
+  const restored = new ChatHistory(state); restored.setAccount('another-key');
+  assert.deepEqual(restored.recent, []);
 });

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Memento } from 'vscode';
 import { Message } from '../types/ai';
 
@@ -10,6 +10,9 @@ interface Conversation {
   updatedAt: number;
   messages: HistoryMessage[];
 }
+
+export const LOCAL_HISTORY_KEY = 'toritsuAI.history.local.v1';
+const LEGACY_HISTORY_PREFIX = 'toritsuAI.history.v1.';
 
 export class ChatHistory {
   private conversations: Conversation[] = [];
@@ -24,11 +27,20 @@ export class ChatHistory {
 
   setAccount(accountId?: string): void {
     this.clear();
-    this.storageKey = accountId ? `toritsuAI.history.v1.${createHash('sha256').update(accountId).digest('hex')}` : undefined;
+    this.storageKey = accountId ? LOCAL_HISTORY_KEY : undefined;
     if (!this.storageKey || !this.storage) return;
-    const raw = this.pendingSnapshots.get(this.storageKey) ?? this.storage.get<unknown>(this.storageKey);
+    let raw = this.pendingSnapshots.get(this.storageKey) ?? this.storage.get<unknown>(this.storageKey);
+    // Import all legacy account/key histories only until a shared snapshot exists.
+    // An explicitly saved empty list means the user cleared history: never reimport it.
+    if (raw === undefined) {
+      raw = (this.storage.keys?.() ?? []).filter(key => key.startsWith(LEGACY_HISTORY_PREFIX))
+        .flatMap(key => {
+          const value = this.storage!.get<unknown>(key);
+          return Array.isArray(value) ? value.slice(0, 10) : [];
+        });
+    }
     if (!Array.isArray(raw)) return;
-    for (const item of raw.slice(0, 10)) {
+    for (const item of raw) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || item.id.length > 100
         || typeof item.title !== 'string' || !Number.isFinite(item.updatedAt) || !Array.isArray(item.messages)) continue;
       const messages: HistoryMessage[] = [];
@@ -37,17 +49,21 @@ export class ChatHistory {
         messages.push({ role: message.role, content: message.content.slice(0, 20000),
           ...(message.role === 'user' && typeof message.inputText === 'string' ? { inputText: message.inputText.slice(0, 20000) } : {}) });
       }
-      if (messages.length && !this.conversations.some(chat => chat.id === item.id)) {
+      if (messages.length) {
+        const index = this.conversations.findIndex(chat => chat.id === item.id);
+        if (index >= 0 && this.conversations[index].updatedAt >= item.updatedAt) continue;
+        if (index >= 0) this.conversations.splice(index, 1);
         this.conversations.push({ id: item.id, title: item.title.slice(0, 80), updatedAt: item.updatedAt, messages });
       }
     }
     this.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    this.conversations = this.conversations.slice(0, 10);
   }
 
   async save(): Promise<void> {
     const key = this.storageKey;
     if (!key || !this.storage) return;
-    // Capture the account and snapshot before awaiting; logout cannot retarget a write.
+    // Capture the shared local snapshot before awaiting; key removal cannot erase a queued write.
     const snapshot = JSON.parse(JSON.stringify(this.conversations));
     this.pendingSnapshots.set(key, snapshot);
     const write = this.pending.then(() => this.storage!.update(key, snapshot));

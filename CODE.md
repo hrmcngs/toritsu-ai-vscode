@@ -551,7 +551,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 </div></header>
 <div id="account-bar" class="account-bar" hidden><span id="account" class="muted"></span><button id="logout" class="text-button" title="保存したAPIキーを削除">キーを削除</button></div>
 <main id="content">
-<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">この端末に保存した、現在のAPI接続の履歴です。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
+<section id="recent" aria-label="チャット履歴" hidden><h2>チャット履歴</h2><p class="muted history-note">このPCの都立AIに保存した履歴です。APIキーやアカウントを変えても引き継がれます。</p><p id="history-empty" class="muted" hidden>まだ履歴はありません。新しいチャットを始めましょう。</p><div id="recent-list"></div>
 <button id="clear" class="text-button muted">履歴をすべて削除</button></section>
 <section id="welcome" class="welcome"><div class="brand">${mark}</div>
 <h1 id="welcome-title">都立AIへようこそ</h1><p id="welcome-description" class="muted">APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。</p>
@@ -889,7 +889,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const id = typeof message.id === 'string' ? message.id : undefined;
         if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
         const confirmed = await vscode.window.showWarningMessage(
-          message.type === 'clear' ? 'このAPI接続の履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          message.type === 'clear' ? 'このPCの都立AIの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
           { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
@@ -1418,7 +1418,7 @@ export class BrowserHandoff {
 ### src/services/chatHistory.ts
 
 ````typescript
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Memento } from 'vscode';
 import { Message } from '../types/ai';
 
@@ -1430,6 +1430,9 @@ interface Conversation {
   updatedAt: number;
   messages: HistoryMessage[];
 }
+
+export const LOCAL_HISTORY_KEY = 'toritsuAI.history.local.v1';
+const LEGACY_HISTORY_PREFIX = 'toritsuAI.history.v1.';
 
 export class ChatHistory {
   private conversations: Conversation[] = [];
@@ -1444,11 +1447,20 @@ export class ChatHistory {
 
   setAccount(accountId?: string): void {
     this.clear();
-    this.storageKey = accountId ? `toritsuAI.history.v1.${createHash('sha256').update(accountId).digest('hex')}` : undefined;
+    this.storageKey = accountId ? LOCAL_HISTORY_KEY : undefined;
     if (!this.storageKey || !this.storage) return;
-    const raw = this.pendingSnapshots.get(this.storageKey) ?? this.storage.get<unknown>(this.storageKey);
+    let raw = this.pendingSnapshots.get(this.storageKey) ?? this.storage.get<unknown>(this.storageKey);
+    // Import all legacy account/key histories only until a shared snapshot exists.
+    // An explicitly saved empty list means the user cleared history: never reimport it.
+    if (raw === undefined) {
+      raw = (this.storage.keys?.() ?? []).filter(key => key.startsWith(LEGACY_HISTORY_PREFIX))
+        .flatMap(key => {
+          const value = this.storage!.get<unknown>(key);
+          return Array.isArray(value) ? value.slice(0, 10) : [];
+        });
+    }
     if (!Array.isArray(raw)) return;
-    for (const item of raw.slice(0, 10)) {
+    for (const item of raw) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || item.id.length > 100
         || typeof item.title !== 'string' || !Number.isFinite(item.updatedAt) || !Array.isArray(item.messages)) continue;
       const messages: HistoryMessage[] = [];
@@ -1457,17 +1469,21 @@ export class ChatHistory {
         messages.push({ role: message.role, content: message.content.slice(0, 20000),
           ...(message.role === 'user' && typeof message.inputText === 'string' ? { inputText: message.inputText.slice(0, 20000) } : {}) });
       }
-      if (messages.length && !this.conversations.some(chat => chat.id === item.id)) {
+      if (messages.length) {
+        const index = this.conversations.findIndex(chat => chat.id === item.id);
+        if (index >= 0 && this.conversations[index].updatedAt >= item.updatedAt) continue;
+        if (index >= 0) this.conversations.splice(index, 1);
         this.conversations.push({ id: item.id, title: item.title.slice(0, 80), updatedAt: item.updatedAt, messages });
       }
     }
     this.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    this.conversations = this.conversations.slice(0, 10);
   }
 
   async save(): Promise<void> {
     const key = this.storageKey;
     if (!key || !this.storage) return;
-    // Capture the account and snapshot before awaiting; logout cannot retarget a write.
+    // Capture the shared local snapshot before awaiting; key removal cannot erase a queued write.
     const snapshot = JSON.parse(JSON.stringify(this.conversations));
     this.pendingSnapshots.set(key, snapshot);
     const write = this.pending.then(() => this.storage!.update(key, snapshot));
@@ -4662,20 +4678,20 @@ test('直近10チャットまで保持し、消去後は会話を再表示でき
 
 function storage() {
   const data = new Map();
-  return { data, get: key => data.get(key), update: async (key, value) => { data.set(key, structuredClone(value)); } };
+  return { data, keys: () => [...data.keys()], get: key => data.get(key), update: async (key, value) => { data.set(key, structuredClone(value)); } };
 }
 
-test('再起動後も同じアカウントの履歴を復元し、別アカウントと分離する', async () => {
+test('再起動・APIキー削除・別アカウントでも同じPCの履歴を復元する', async () => {
   const state = storage();
   const history = new ChatHistory(state);
   history.setAccount('account-a'); history.append('保存する質問', '保存する回答'); await history.save();
   const id = history.recent[0].id;
   history.setAccount(undefined); assert.deepEqual(history.recent, []);
-  history.setAccount('account-b'); assert.deepEqual(history.recent, []);
+  history.setAccount('account-b'); assert.equal(history.recent[0].id, id);
   history.append('Bの質問', 'Bの回答'); await history.save();
   const restored = new ChatHistory(state); restored.setAccount('account-a'); restored.select(id);
   assert.equal(restored.messages[0].content, '保存する質問');
-  assert.equal(restored.recent.length, 1);
+  assert.equal(restored.recent.length, 2);
 });
 
 test('個別削除と全削除を保存し、削除した会話は復元しない', async () => {
@@ -4689,16 +4705,16 @@ test('個別削除と全削除を保存し、削除した会話は復元しな�
   restored.clear(); await restored.save(); history.setAccount('a'); assert.deepEqual(history.recent, []);
 });
 
-test('保存途中のログアウト・アカウント変更でも保存先が混ざらない', async () => {
+test('保存途中のキー削除・アカウント変更でも共有履歴を失わない', async () => {
   const state = storage(); let release;
   const write = state.update;
   state.update = async (...args) => { await new Promise(resolve => { release = resolve; }); await write(...args); };
   const history = new ChatHistory(state); history.setAccount('a'); history.append('A only', 'reply');
-  const saving = history.save(); history.setAccount('b'); assert.deepEqual(history.recent, []);
+  const saving = history.save(); history.setAccount('b'); assert.equal(history.recent[0].title, 'A only');
   history.setAccount('a'); assert.equal(history.recent[0].title, 'A only');
   while (!release) await new Promise(resolve => setImmediate(resolve));
   release(); await saving;
-  history.setAccount('b'); assert.deepEqual(history.recent, []);
+  history.setAccount('b'); assert.equal(history.recent[0].title, 'A only');
 });
 
 test('保存失敗を通知し、不正な保存データを採用しない', async () => {
@@ -4721,6 +4737,22 @@ test('入力履歴は補足情報を含まない原文を復元し、API向け�
   const restored = new ChatHistory(storage); restored.setAccount('input-history'); restored.select(restored.recent[0].id);
   assert.deepEqual(restored.inputHistory, ['  質問  ']);
   restored.startNew(); assert.deepEqual(restored.inputHistory, []);
+});
+
+test('過去のアカウント別履歴を統合し、削除後は古いデータを再表示しない', async () => {
+  const { LOCAL_HISTORY_KEY } = require('../dist/services/chatHistory');
+  const state = storage();
+  const chat = (id, updatedAt, title) => ({ id, title, updatedAt, messages: [{ role: 'user', content: title }, { role: 'assistant', content: 'reply' }] });
+  state.data.set('toritsuAI.history.v1.old-a', [chat('a', 1, 'A'), chat('same', 2, 'old')]);
+  state.data.set('toritsuAI.history.v1.old-b', [chat('b', 4, 'B'), chat('same', 5, 'new')]);
+  state.data.set('unrelated', [chat('private', 100, 'unrelated')]);
+  const history = new ChatHistory(state); history.setAccount('new-key');
+  assert.deepEqual(history.recent.map(chat => chat.title), ['new', 'B', 'A']);
+  await history.save();
+  assert.equal(state.data.get(LOCAL_HISTORY_KEY).length, 3);
+  history.clear(); await history.save();
+  const restored = new ChatHistory(state); restored.setAccount('another-key');
+  assert.deepEqual(restored.recent, []);
 });
 ````
 
@@ -8391,7 +8423,7 @@ Microsoftログインは不要です。APIキーはVS CodeのSecretStorageに保
 「APIキー登録済み（接続未確認）」は保存状態を示します。有効性と利用権限は接続先APIが判定します。
 キーの削除・変更や接続先の変更では、進行中のリクエストを中断して結果を破棄します。
 画面上部の「キーを削除」または `Toritsu AI: Remove API Key` でSecretStorageからキーを削除できます。
-履歴は接続先URLとキーの指紋で分離し、同じ組み合わせを再登録すると復元します。古いMicrosoftアカウント単位の履歴は自動移行しません。
+履歴はアカウント・APIキー・接続先に紐付けず、このPCの都立AI拡張内で共有します。キーを削除しても保存済みの履歴は消えず、別のキーを登録しても引き継がれます。
 ブラウザの都立AIアカウントとは連携しません。拡張内の通信には、API提供元から発行されたキーと対応するAPIのURLが必要です。
 
 編集は自動保存せず、Undoで戻せます。リクエスト開始後に元ファイルが変更・クローズされた場合は適用しません。
@@ -8402,7 +8434,7 @@ Microsoftログインは不要です。APIキーはVS CodeのSecretStorageに保
 （サイドバーにフォーカスした場合は最後に利用したエディター）の未保存内容を含む全文・選択・言語・パスを送ります。
 直近10チャットを保持し、各会話で成功した直近10往復をAPI接続別に保存して次の質問に付加します。添付全文はその送信にだけ付加し、
 後続の履歴には保持しません。失敗時は入力を残して再送できます。中止・履歴消去に対応します。
-ビューを閉じたりウィンドウを再読み込みしても、同じAPI接続の履歴を復元できます。
+ビューを閉じたりウィンドウを再読み込みしても、このPCに保存した共通の履歴を復元できます。
 回答はHTMLとして解釈せずプレーンテキスト表示します。APIキーはWebviewへ渡しません。
 
 ## APIと構成
@@ -8453,7 +8485,7 @@ APIキーは設定ファイルに書かずSecretStorageに保存します。コ�
 4. 選択編集が反映され、Undoで戻せる。
 5. 応答待ち中にファイルを変更すると、編集が拒否される。
 6. チャット履歴、全文チェック、中止、履歴消去が動く。
-7. キー削除後に入力・コード編集が禁止され、履歴表示が消え、同じキーと接続先を再登録すると復元できる。
+7. キー削除後に入力・コード編集が禁止され、履歴表示が消え、別のキーを登録しても履歴を復元できる。
 8. 画像のドロップ・選択・貼り付け・削除、画像だけの送信、失敗時の再送が動く。
 9. 承認モードを変更し、送信・編集の確認を取り消すと処理が実行されない。
 
@@ -8464,7 +8496,8 @@ VS Code APIの参照: https://code.visualstudio.com/api/references/vscode-api
 上部の「履歴」、または `Toritsu AI: Show History` で一覧を開き、会話を選ぶと続きから相談できます。
 「新しいチャット」で別の会話を始められます。各行の「削除」と「履歴をすべて削除」は確認後に削除します。
 直近10チャット、各チャット直近10往復、1メッセージ最大2万文字を保存します。上限を超えた文章は省略表示されます。
-履歴は接続先URLとキーの指紋ごとに分け、VS Codeのローカル拡張ストレージに保存します。再起動後も残り、Settings Syncの対象には登録しません。
+履歴は同じPC・同じVS Codeプロファイルのローカル拡張ストレージに共通保存します。アカウント・APIキー・接続先を変えても、再起動後も引き継ぎます。別PCや別のOSユーザー、別のVS Codeプロファイルへの同期は行いません。Settings Syncの対象には登録しません。
+過去のキー・アカウント別の保存形式が残っている場合は、更新日時の新しい順に直近10チャットを統合します。共通履歴を削除した後に古い保存形式から復活することはありません。同じVS Codeプロファイルを使う人は共通履歴を閲覧できます。
 保存するのは質問・回答・添付のファイル名や参照URLです。画像本体・ファイル全文のコンテキスト・取得資料の本文は履歴に保存しませんが、質問やAIの回答に含まれたコード・資料の引用は保存されます。
 履歴はSecretStorageによる暗号化保存ではありません。機密情報を含む会話は、利用後に履歴から削除してください。
 

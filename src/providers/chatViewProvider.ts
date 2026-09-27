@@ -275,7 +275,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const id = typeof message.id === 'string' ? message.id : undefined;
         if (message.type === 'delete' && (!id || !this.history.recent.some(chat => chat.id === id))) return;
         const confirmed = await vscode.window.showWarningMessage(
-          message.type === 'clear' ? 'このAPI接続の履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
+          message.type === 'clear' ? 'このPCの都立AIの履歴をすべて削除しますか？' : 'このチャットを削除しますか？',
           { modal: true, detail: 'この端末に保存した履歴を削除します。この操作は元に戻せません。' }, '削除する');
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
