@@ -30,3 +30,13 @@ test('接続先不明・キャンセルでは接続先を勝手に設定しな�
   const controller = new AbortController(); controller.abort();
   await assert.rejects(setup.ensureConnection(controller.signal), /キャンセル/);
 });
+
+
+test('授業用APIの選択はURLとパスを設定し、保存済みキーを維持する', async () => {
+  config = {}; choice = { id: 'toritsu' }; prompts = 0;
+  const setup = new ConnectionSetup({ get: async () => 'saved-key', store: async () => { throw new Error('must not store'); } });
+  await setup.ensureConnection();
+  assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+  assert.equal(config.chatEndpoint, '/api/v1/public/message');
+  assert.equal(prompts, 0);
+});

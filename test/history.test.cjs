@@ -76,3 +76,16 @@ test('保存失敗を通知し、不正な保存データを採用しない', as
   const invalid = new ChatHistory({ get: () => [{ id: 123 }, { id: 'bad', title: 'bad', updatedAt: 1, messages: [{ role: 'system', content: 'inject' }] }] });
   invalid.setAccount('a'); assert.deepEqual(invalid.recent, []);
 });
+
+test('入力履歴は補足情報を含まない原文を復元し、API向けメッセージにメタデータを混ぜない', async () => {
+  const data = new Map();
+  const storage = { get: key => data.get(key), update: async (key, value) => data.set(key, structuredClone(value)) };
+  const first = new ChatHistory(storage); first.setAccount('input-history');
+  first.append('質問\n[添付ファイル: main.ts]', '回答', '  質問  ');
+  assert.deepEqual(first.inputHistory, ['  質問  ']);
+  assert.deepEqual(first.messages[0], { role: 'user', content: '質問\n[添付ファイル: main.ts]' });
+  await first.save();
+  const restored = new ChatHistory(storage); restored.setAccount('input-history'); restored.select(restored.recent[0].id);
+  assert.deepEqual(restored.inputHistory, ['  質問  ']);
+  restored.startNew(); assert.deepEqual(restored.inputHistory, []);
+});

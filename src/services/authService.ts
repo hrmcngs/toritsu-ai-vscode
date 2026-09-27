@@ -9,6 +9,7 @@ export interface Authentication {
   readonly session: LoginSession | undefined;
   readonly onDidChange: vscode.Event<LoginSession | undefined>;
   requireSession(): Promise<LoginSession>;
+  markConnectionVerified?(sessionKey: string): void;
 }
 
 /** Local readiness gate only. The API server validates the actual key on each request. */
@@ -18,6 +19,8 @@ export class AuthService implements Authentication, vscode.Disposable {
   private keyPrompt?: vscode.CancellationTokenSource;
   private readonly changed = new vscode.EventEmitter<LoginSession | undefined>();
   readonly onDidChange = this.changed.event;
+  private readonly statusChanged = new vscode.EventEmitter<void>();
+  readonly onDidChangeStatus = this.statusChanged.event;
   private readonly subscriptions: vscode.Disposable[];
 
   constructor(private readonly secrets: vscode.SecretStorage) {
@@ -28,11 +31,20 @@ export class AuthService implements Authentication, vscode.Disposable {
     };
     this.subscriptions = [
       secrets.onDidChange(event => { if (event.key === API_KEY_SECRET) refresh(); }),
-      vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('toritsuAI.baseUrl')) refresh(); })
+      vscode.workspace.onDidChangeConfiguration(event => {
+        if (['baseUrl', 'chatEndpoint', 'authHeader', 'apiKeyPrefix'].some(key => event.affectsConfiguration(`toritsuAI.${key}`))) refresh();
+      })
     ];
   }
 
   get session(): LoginSession | undefined { return this.current; }
+
+  markConnectionVerified(sessionKey: string): void {
+    if (!this.current || this.current.key !== sessionKey || this.current.accountLabel === 'APIキー登録済み（接続確認済み）') return;
+    this.current = { ...this.current, accountLabel: 'APIキー登録済み（接続確認済み）' };
+    // A status update must not cancel requests or reset the current conversation.
+    this.statusChanged.fire();
+  }
 
   private update(accountId?: string): void {
     if (accountId === this.current?.accountId) return;
@@ -72,5 +84,5 @@ export class AuthService implements Authentication, vscode.Disposable {
     return this.current;
   }
 
-  dispose(): void { this.keyPrompt?.cancel(); this.keyPrompt?.dispose(); for (const subscription of this.subscriptions) subscription.dispose(); this.changed.dispose(); }
+  dispose(): void { this.keyPrompt?.cancel(); this.keyPrompt?.dispose(); for (const subscription of this.subscriptions) subscription.dispose(); this.changed.dispose(); this.statusChanged.dispose(); }
 }

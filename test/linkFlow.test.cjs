@@ -103,3 +103,88 @@ test('ブラウザ版への引き継ぎではAPIを呼ばず、下書きの添�
   assert.equal(state().files.length, 1); assert.deepEqual(state().messages, []);
   assert.equal(state().browserMode, true); assert.match(state().notice, /コピーしました/);
 });
+
+test('チャットのファイル提案を承認フローへ渡し、プランモードと履歴表示では作成しない', async t => {
+  const generation = require('../dist/services/generatedFiles');
+  const files = [{ path: 'example.txt', content: 'test' }];
+  const answer = '```toritsu-files\n' + JSON.stringify({ files }) + '\n```';
+  let calls = 0;
+  t.mock.method(generation, 'createGeneratedFiles', async (proposal, signal, isCurrent) => {
+    assert.deepEqual(proposal, files); assert.equal(signal.aborted, false); assert.equal(isCurrent(), true);
+    calls++; return '作成しました: example.txt';
+  });
+  const { provider, state } = setup(t, async () => answer);
+  await provider.receive({ type: 'send', text: 'example.txtを作成して' });
+  assert.equal(calls, 1); assert.match(state().notice, /作成しました/);
+  await provider.receive({ type: 'select', id: state().recent[0].id });
+  assert.equal(calls, 1);
+  provider.planMode = true;
+  await provider.receive({ type: 'send', text: 'ファイル作成の計画を立てて' });
+  assert.equal(calls, 1);
+});
+
+test('停止後の遅い回答を破棄し、修正した質問で再送できる', async t => {
+  let finish, signal, calls = 0;
+  const { provider, state } = setup(t, async (messages, currentSignal) => {
+    if (++calls === 1) { signal = currentSignal; return new Promise(resolve => { finish = resolve; }); }
+    assert.equal(messages.at(-1).content, '修正版'); return '修正後の回答';
+  });
+  const pending = provider.receive({ type: 'send', text: '最初の質問' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  await provider.receive({ type: 'cancel' }); assert.equal(signal.aborted, true);
+  await provider.receive({ type: 'send', text: '停止中は送らない' }); assert.equal(calls, 1);
+  finish('遅い回答'); await pending;
+  assert.equal(state().messages.length, 0); assert.equal(state().busy, false);
+  await provider.receive({ type: 'send', text: '修正版' });
+  assert.deepEqual(state().inputHistory, ['修正版']);
+  assert.equal(state().messages[1].content, '修正後の回答');
+});
+
+test('チャット内の承認応答を処理し、停止で承認待機を解除する', async t => {
+  const { provider, state } = setup(t, async () => 'unused');
+  let pending = provider.approvalPrompt.request({ title: '作成', detail: '/project' });
+  assert.equal(state().busy, true);
+  const id = state().approvalRequest.id;
+  await provider.receive({ type: 'approvalResponse', id, allowed: true });
+  assert.equal(await pending, true); assert.equal(state().approvalRequest, undefined);
+  pending = provider.approvalPrompt.request({ title: '送信', detail: '' });
+  await provider.receive({ type: 'cancel' }); assert.equal(await pending, false);
+});
+
+test('添付した元内容と保存先を生成・編集処理へ引き継ぐ', async t => {
+  const generation = require('../dist/services/generatedFiles');
+  const files = [{ path: 'a.txt', original: 'before', content: 'after' }];
+  const answer = '```toritsu-files\n' + JSON.stringify({ files }) + '\n```';
+  const { provider, state } = setup(t, async messages => {
+    const request = JSON.parse(messages.at(-1).content);
+    assert.equal(request.outputDirectory, '/project'); assert.equal(request.files[0].text, 'before'); return answer;
+  });
+  provider.files = [{ id: 'one', name: 'a.txt', path: '/project/a.txt', text: 'before' }];
+  t.mock.method(generation, 'createGeneratedFiles', async (changes, _signal, _current, root, _approvals, sources) => {
+    assert.deepEqual(changes, files); assert.equal(root, '/project');
+    assert.deepEqual(sources, [{ path: '/project/a.txt', text: 'before' }]); return '変更を適用しました';
+  });
+  await provider.receive({ type: 'send', text: '添付ファイルを編集して' });
+  assert.match(state().notice, /変更を適用/);
+});
+
+test('既存ファイルの作成衝突を検出したら現在の内容で再生成し、手動添付なしで編集する', async t => {
+  const generation = require('../dist/services/generatedFiles');
+  const wrap = files => '```toritsu-files\n' + JSON.stringify({ files }) + '\n```';
+  let apiCalls = 0, applies = 0;
+  const { provider, state } = setup(t, async messages => {
+    if (++apiCalls === 1) return wrap([{ path: 'a.txt', content: 'new' }]);
+    const correction = JSON.parse(messages.at(-1).content);
+    assert.equal(correction.files[0].text, 'old');
+    return wrap([{ path: 'a.txt', original: 'old', content: 'merged' }]);
+  });
+  t.mock.method(generation, 'createGeneratedFiles', async (files, _signal, _current, root, _approval, sources) => {
+    if (++applies === 1) throw new generation.ExistingFilesNeedEditing('/project', [{ id: 'existing', name: 'a.txt', path: '/project/a.txt', text: 'old' }]);
+    assert.equal(root, '/project'); assert.equal(files[0].original, 'old'); assert.equal(sources[0].text, 'old');
+    return '変更を適用しました';
+  });
+  await provider.receive({ type: 'send', text: 'ファイルを整えて' });
+  assert.equal(apiCalls, 2); assert.equal(applies, 2);
+  assert.equal(state().messages.length, 2); assert.match(state().messages[1].content, /merged/);
+  assert.match(state().notice, /変更を適用/);
+});

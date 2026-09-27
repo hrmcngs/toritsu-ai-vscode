@@ -1,4 +1,10 @@
 import * as vscode from 'vscode';
+import { isToritsuPublicApi } from './toritsuPublicApi';
+
+export function usesToritsuPublicApi(): boolean {
+  const config = vscode.workspace.getConfiguration('toritsuAI');
+  return isToritsuPublicApi({ baseUrl: config.get<string>('baseUrl', ''), chatEndpoint: config.get<string>('chatEndpoint', '') });
+}
 
 const presets = [
   { id: 'fast', label: '高速モデル', setting: 'fastModel' },
@@ -10,6 +16,7 @@ export class ModelSelection {
     private readonly prepare: (signal?: AbortSignal) => Promise<void> = async () => {}) {}
   get state() {
     const config = vscode.workspace.getConfiguration('toritsuAI');
+    if (usesToritsuPublicApi()) return { current: '', label: '都立AI（授業用）', options: [] };
     const current = config.get<string>('model', '').trim();
     const options = presets.map(preset => {
       const model = config.get<string>(preset.setting, '').trim();
@@ -22,7 +29,7 @@ export class ModelSelection {
     const preset = presets.find(item => item.id === id);
     if (!preset && id !== 'custom') throw new Error('不正なモデル選択です。');
     await this.prepare(signal);
-    if (signal?.aborted) return;
+    if (signal?.aborted || usesToritsuPublicApi()) return;
     const config = vscode.workspace.getConfiguration('toritsuAI');
     const baseUrl = config.get<string>('baseUrl', '');
     let model = preset ? config.get<string>(preset.setting, '').trim() : '';

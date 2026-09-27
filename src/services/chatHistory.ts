@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Memento } from 'vscode';
 import { Message } from '../types/ai';
 
+interface HistoryMessage extends Message { inputText?: string }
+
 interface Conversation {
   id: string;
   title: string;
   updatedAt: number;
-  messages: Message[];
+  messages: HistoryMessage[];
 }
 
 export class ChatHistory {
@@ -29,10 +31,11 @@ export class ChatHistory {
     for (const item of raw.slice(0, 10)) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || item.id.length > 100
         || typeof item.title !== 'string' || !Number.isFinite(item.updatedAt) || !Array.isArray(item.messages)) continue;
-      const messages: Message[] = [];
+      const messages: HistoryMessage[] = [];
       for (const message of item.messages.slice(-20)) {
         if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') continue;
-        messages.push({ role: message.role, content: message.content.slice(0, 20000) });
+        messages.push({ role: message.role, content: message.content.slice(0, 20000),
+          ...(message.role === 'user' && typeof message.inputText === 'string' ? { inputText: message.inputText.slice(0, 20000) } : {}) });
       }
       if (messages.length && !this.conversations.some(chat => chat.id === item.id)) {
         this.conversations.push({ id: item.id, title: item.title.slice(0, 80), updatedAt: item.updatedAt, messages });
@@ -57,7 +60,12 @@ export class ChatHistory {
   }
 
   get messages(): readonly Message[] {
-    return this.conversations.find(chat => chat.id === this.activeId)?.messages ?? [];
+    return (this.conversations.find(chat => chat.id === this.activeId)?.messages ?? []).map(({ role, content }) => ({ role, content }));
+  }
+
+  get inputHistory(): string[] {
+    return (this.conversations.find(chat => chat.id === this.activeId)?.messages ?? [])
+      .filter(message => message.role === 'user').map(message => message.inputText ?? String(message.content));
   }
 
   get recent(): { id: string; title: string; updatedAt: number }[] {
@@ -66,18 +74,25 @@ export class ChatHistory {
 
   startNew(): void { this.activeId = undefined; }
 
+  replaceLastAnswer(answer: string): void {
+    const chat = this.conversations.find(item => item.id === this.activeId);
+    const last = chat?.messages.at(-1);
+    if (last?.role !== 'assistant') return;
+    last.content = answer.length <= 20000 ? answer : answer.slice(0, 19985) + '\n[履歴の文字数上限で省略]';
+  }
+
   select(id: string): void {
     if (this.conversations.some(chat => chat.id === id)) this.activeId = id;
   }
 
-  append(question: string, answer: string): void {
+  append(question: string, answer: string, inputText?: string): void {
     let chat = this.conversations.find(item => item.id === this.activeId);
     if (!chat) {
       chat = { id: randomUUID(), title: question.replace(/\s+/g, ' ').slice(0, 80), updatedAt: Date.now(), messages: [] };
       this.activeId = chat.id;
     }
     const bounded = (text: string) => text.length <= 20000 ? text : text.slice(0, 19985) + '\n[履歴の文字数上限で省略]';
-    chat.messages.push({ role: 'user', content: bounded(question) }, { role: 'assistant', content: bounded(answer) });
+    chat.messages.push({ role: 'user', content: bounded(question), ...(inputText !== undefined ? { inputText: bounded(inputText) } : {}) }, { role: 'assistant', content: bounded(answer) });
     chat.messages = chat.messages.slice(-20);
     chat.updatedAt = Date.now();
     this.conversations = [chat, ...this.conversations.filter(item => item.id !== chat.id)].slice(0, 10);

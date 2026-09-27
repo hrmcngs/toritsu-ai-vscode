@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
 import { ConnectionSetup } from './services/connectionSetup';
-import { ModelSelection } from './services/modelSelection';
+import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
 import { openChat } from './commands/openChat';
@@ -39,11 +39,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const models = new ModelSelection(signal => catalog.listModels(signal), signal => setup.ensureConnection(signal));
   const readyClient: LlmClient = { complete: async (messages, signal) => {
     await setup.ensureConnection(signal);
-    if (!vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) {
+    if (!usesToritsuPublicApi() && !vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) {
       await models.select('custom', signal);
     }
     if (signal?.aborted) throw new Error('送信をキャンセルしました。');
-    if (!vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) throw new Error('モデルを選択してから送信してください。');
+    if (!usesToritsuPublicApi() && !vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) throw new Error('モデルを選択してから送信してください。');
     return new ApprovedClient(approvals, transport).complete(messages, signal);
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);

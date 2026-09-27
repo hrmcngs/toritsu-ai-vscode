@@ -67,3 +67,13 @@ test('確認の待機中にキャンセルされた送信を阻止', async () =>
   const promise = new ApprovalService().approveSend(controller.signal);
   controller.abort(); await assert.rejects(promise, /キャンセル/);
 });
+
+test('チャットの承認表示を優先し、毎回確認だけファイル作成を確認する', async () => {
+  const approvals = new ApprovalService(); let requests = 0;
+  const subscription = approvals.setPresenter(async details => { requests++; assert.equal(details.files[0].path, 'a.txt'); return true; });
+  mode = 'ask'; prompts = 0;
+  assert.equal(await approvals.approveCreate('/project', [{ path: 'a.txt', content: 'text' }]), true);
+  mode = 'auto'; await approvals.approveCreate('/project', [{ path: 'a.txt', content: '' }]);
+  mode = 'full'; await approvals.approveCreate('/project', [{ path: 'a.txt', content: '' }]);
+  assert.equal(requests, 1); assert.equal(prompts, 0); subscription.dispose();
+});

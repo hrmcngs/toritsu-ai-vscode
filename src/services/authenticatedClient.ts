@@ -21,6 +21,7 @@ export class AuthenticatedClient implements LlmClient {
       if (controller.signal.aborted || this.auth.session?.key !== session.key) {
         throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
       }
+      this.auth.markConnectionVerified?.(session.key);
       return result;
     } finally {
       subscription.dispose();

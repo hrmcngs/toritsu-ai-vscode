@@ -71,3 +71,14 @@ test('ログアウトなどによる取得中断時はモデルを変更しな�
   await models.select('custom', controller.signal);
   assert.equal(config.model, 'original'); assert.equal(prompts, 0);
 });
+
+
+test('授業用APIではモデル一覧を問い合わせずモデルIDを要求しない', async () => {
+  config = { baseUrl: 'https://ai-api.metro.tokyo.lg.jp', chatEndpoint: '/api/v1/public/message' };
+  const models = new ModelSelection(async () => { throw new Error('must not list'); });
+  await models.select('custom');
+  await models.select('fast');
+  assert.equal(models.state.label, '都立AI（授業用）');
+  assert.deepEqual(models.state.options, []);
+  assert.equal(config.model, undefined);
+});

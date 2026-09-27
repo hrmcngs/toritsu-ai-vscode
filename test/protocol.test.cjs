@@ -39,3 +39,33 @@ test('malformed responses fail without leaking body; fences preserve source form
   assert.equal(extractCode('  const x = 1;\n'), '  const x = 1;\n');
   assert.throws(() => extractCode('```ts\n\n```'), /空/);
 });
+
+const publicConfig = { ...config, baseUrl: 'https://ai-api.metro.tokyo.lg.jp', chatEndpoint: '/api/v1/public/message', model: '' };
+
+test('授業用APIはモデルなしで公式サンプルのURL・認証・inputを送りmessageを読む', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(url.href, 'https://ai-api.metro.tokyo.lg.jp/api/v1/public/message');
+    assert.equal(init.headers.get('Authorization'), 'Bearer test-key');
+    assert.equal(init.headers.get('Accept'), 'application/json');
+    assert.deepEqual(JSON.parse(init.body), { input: 'こんにちは', conversation_id: '' });
+    return new Response(JSON.stringify({ message: 'こんにちは！', response: { conversation: { id: 'server-id' } } }));
+  });
+  const client = new ToritsuAiClient(() => publicConfig, async () => 'test-key');
+  assert.equal(await client.complete([{ role: 'user', content: 'こんにちは' }]), 'こんにちは！');
+  assert.equal(await client.complete([{ role: 'user', content: 'こんにちは' }]), 'こんにちは！');
+});
+
+test('授業用APIは会話履歴を含め、画像・不正な応答は明確に拒否する', async t => {
+  const { ToritsuPublicProtocol } = require('../dist/services/apiProtocol');
+  const protocol = new ToritsuPublicProtocol();
+  assert.deepEqual(protocol.request(publicConfig, [
+    { role: 'system', content: '日本語で回答' }, { role: 'user', content: '質問' },
+    { role: 'assistant', content: '回答' }, { role: 'user', content: [{ type: 'text', text: '続き' }] }
+  ]), { input: '[system]\n日本語で回答\n\n[user]\n質問\n\n[assistant]\n回答\n\n[user]\n続き', conversation_id: '' });
+  for (const body of [null, {}, { message: '' }, { message: 1 }]) assert.throws(() => protocol.response(body), /API応答/);
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('must not send'); });
+  await assert.rejects(new ToritsuAiClient(() => publicConfig, async () => 'test-key').complete([
+    { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,test' } }] }
+  ]), /画像添付/);
+  assert.equal(fetch.mock.callCount(), 0);
+});

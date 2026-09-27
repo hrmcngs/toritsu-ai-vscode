@@ -72,3 +72,36 @@ test('入力キャンセルやキー削除後に遅れて返る入力では登�
   const pending = auth.signIn(); await auth.signOut(); resolve('must-not-store'); await pending;
   assert.equal(data.size, 0); assert.equal(auth.session, undefined);
 });
+
+
+test('通信成功で接続確認済みへ切り替え、セッションや会話をリセットしない', async t => {
+  const { auth, secrets } = setup(t); input = 'key'; await auth.signIn();
+  const before = auth.session;
+  let identityChanges = 0, statusChanges = 0;
+  auth.onDidChange(() => identityChanges++);
+  auth.onDidChangeStatus(() => statusChanges++);
+  const client = new AuthenticatedClient(auth, { complete: async () => 'ok' });
+  assert.equal(await client.complete([]), 'ok');
+  assert.match(auth.session.accountLabel, /接続確認済み/);
+  assert.equal(auth.session.key, before.key);
+  assert.equal(auth.session.accountId, before.accountId);
+  await auth.restore();
+  assert.match(auth.session.accountLabel, /接続確認済み/);
+  await client.complete([]);
+  assert.equal(identityChanges, 0); assert.equal(statusChanges, 1);
+  await secrets.store('toritsuAI.apiKey', 'new-key'); await auth.restore();
+  assert.match(auth.session.accountLabel, /接続未確認/);
+  auth.markConnectionVerified(before.key);
+  assert.match(auth.session.accountLabel, /接続未確認/);
+});
+
+test('失敗した通信では接続確認済みにならず、接続設定変更で確認状態を解除する', async t => {
+  const { auth } = setup(t); input = 'key'; await auth.signIn();
+  const client = new AuthenticatedClient(auth, { complete: async () => { throw new Error('HTTP 401'); } });
+  await assert.rejects(client.complete([]), /401/);
+  assert.match(auth.session.accountLabel, /接続未確認/);
+  auth.markConnectionVerified(auth.session.key);
+  configuration.fire({ affectsConfiguration: key => key === 'toritsuAI.chatEndpoint' });
+  await auth.restore();
+  assert.match(auth.session.accountLabel, /接続未確認/);
+});

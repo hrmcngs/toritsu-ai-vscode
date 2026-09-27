@@ -7,12 +7,115 @@
   let images = [];
   let reading = false;
   let attachmentGeneration = 0;
+  const inputHistory = new PromptHistory();
+  let pendingSubmission = false;
+  let stopping = false;
+  let submission;
+  const filePreviewOpen = new Map();
+  const defaultPlaceholder = prompt.placeholder;
+  function filePreview(file) {
+    if (typeof file.original !== 'string') return file.content;
+    if (file.original === file.content) return '変更なし';
+    const before = file.original.split('\n'); const after = file.content.split('\n');
+    let start = 0, end = 0;
+    while (start < before.length && start < after.length && before[start] === after[start]) start++;
+    while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
+    return [...before.slice(Math.max(0, start - 3), start).map(line => '  ' + line),
+      ...before.slice(start, before.length - end).map(line => '- ' + line),
+      ...after.slice(start, after.length - end).map(line => '+ ' + line),
+      ...after.slice(after.length - end, after.length - end + 3).map(line => '  ' + line)].join('\n');
+  }
+  function appendAnswer(article, text, messageIndex) {
+    const appendText = value => {
+      if (!value.trim()) return;
+      const paragraph = document.createElement('pre'); paragraph.textContent = value; article.append(paragraph);
+    };
+    let cursor = 0;
+    for (const match of text.matchAll(/^```toritsu-files[^\S\r\n]*\r?\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
+      appendText(text.slice(cursor, match.index));
+      cursor = match.index + match[0].length;
+      let files;
+      try {
+        files = JSON.parse(match[1]).files;
+        if (!Array.isArray(files) || !files.length || files.length > 20 || files.some(file => !file || typeof file.path !== 'string' || typeof file.content !== 'string')) throw new Error();
+      } catch {
+        const raw = document.createElement('details'); raw.className = 'generated-file';
+        const title = document.createElement('summary'); title.textContent = '生成データの形式を確認してください';
+        const content = document.createElement('pre'); content.textContent = match[1]; raw.append(title, content); article.append(raw);
+        continue;
+      }
+      const group = document.createElement('section'); group.className = 'generated-files';
+      const title = document.createElement('p'); title.className = 'generated-files-title'; title.textContent = `ファイルの${files.some(file => typeof file.original === 'string') ? '変更' : '作成'}候補 · ${files.length}件`;
+      group.append(title);
+      files.forEach((file, index) => {
+        const card = document.createElement('details'); card.className = 'generated-file';
+        const key = `${messageIndex}:${match.index}:${index}:${file.path}`;
+        card.open = filePreviewOpen.get(key) ?? files.length === 1;
+        card.addEventListener('toggle', () => filePreviewOpen.set(key, card.open));
+        const summary = document.createElement('summary');
+        const name = document.createElement('span'); name.className = 'generated-file-name'; name.textContent = (typeof file.original === 'string' ? '編集 · ' : '') + file.path;
+        const count = document.createElement('span'); count.className = 'generated-file-count';
+        count.textContent = `${file.content ? file.content.replace(/\n$/, '').split('\n').length : 0}行`;
+        summary.append(name, count);
+        const content = document.createElement('pre');
+        const code = document.createElement('code'); code.textContent = filePreview(file); content.append(code);
+        card.append(summary, content); group.append(card);
+      });
+      article.append(group);
+    }
+    appendText(text.slice(cursor));
+  }
+  function restoreSubmission() {
+    if (submission && !prompt.value) {
+      prompt.value = submission.input;
+      prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+    }
+  }
+  function renderMessages() {
+    el('messages').replaceChildren();
+    const messages = [...(state.messages ?? [])];
+    if (submission) messages.push({ role: 'user', content: submission.text, status: submission.status });
+    for (const [messageIndex, message] of messages.entries()) {
+      const article = document.createElement('article');
+      article.className = message.role === 'user' ? 'user' : 'assistant';
+      const heading = document.createElement('div'); heading.className = 'message-heading';
+      const label = document.createElement('strong'); label.textContent = message.role === 'user' ? 'あなた' : '都立AI';
+      heading.append(label);
+      if (message.role === 'user') {
+        const badge = document.createElement('span'); badge.className = `message-status ${message.status || 'complete'}`;
+        badge.textContent = message.status === 'sending' && state.approvalRequest ? '確認待ち' : ({ sending: '送信中・回答待ち', stopping: '停止中', stopped: '停止しました', failed: '完了できませんでした' })[message.status] || '✓ 送信済み';
+        heading.append(badge);
+      }
+      article.append(heading);
+      if (message.role === 'assistant') appendAnswer(article, message.content, messageIndex);
+      else {
+        const content = document.createElement('pre'); content.textContent = message.content; article.append(content);
+      }
+      if (message.status === 'failed' || message.status === 'stopped') {
+        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'text-button'; edit.textContent = '入力を編集して再送';
+        edit.addEventListener('click', () => { restoreSubmission(); prompt.focus(); }); article.append(edit);
+      }
+      el('messages').append(article);
+    }
+    if (submission?.status === 'sending' && !state.approvalRequest) {
+      const waiting = document.createElement('article'); waiting.className = 'assistant response-waiting';
+      const label = document.createElement('strong'); label.textContent = '都立AI';
+      const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = '回答を待っています…';
+      waiting.append(label, content); el('messages').append(waiting);
+    }
+    if (submission) {
+      el('welcome').hidden = true; el('messages').hidden = false; el('recent').hidden = true;
+    }
+    prompt.placeholder = submission?.status === 'sending' ? '送信中…停止ボタンで入力を編集できます' : defaultPlaceholder;
+    if (messages.length) el('content').scrollTop = el('content').scrollHeight;
+  }
   const modes = { ask: '毎回確認', auto: '自動承認', full: 'フルアクセス' };
   const imageLimit = 5 * 1024 * 1024;
   const totalLimit = 10 * 1024 * 1024;
   function syncControls() {
     const disabled = !state.signedIn || state.busy || state.changingModel || reading;
     for (const id of ['send', 'attach', 'prompt', 'context', 'load-links']) el(id).disabled = disabled;
+    if (stopping && state.signedIn) prompt.disabled = false;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     for (const button of el('attachments').querySelectorAll('button')) button.disabled = state.busy || reading;
   }
@@ -189,6 +292,15 @@
   for (const action of ['login', 'logout', 'home', 'new', 'settings', 'clear', 'cancel']) {
     el(action).addEventListener('click', () => {
       if (action === 'login') el('login').disabled = true;
+      if (action === 'cancel' && state.busy && pendingSubmission) {
+        stopping = true;
+        restoreSubmission();
+        if (submission) submission.status = 'stopping';
+        renderMessages();
+        syncControls();
+        prompt.focus();
+        el('status').textContent = '停止しています…入力を編集できます。';
+      }
       vscode.postMessage({ type: action });
     });
   }
@@ -196,28 +308,67 @@
     event.preventDefault();
     if (!state.signedIn || state.busy || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
     state.busy = true;
+    pendingSubmission = true;
+    stopping = false;
+    inputHistory.reset();
     syncControls(); closeApprovalMenu(); closeModelMenu(); closeAddMenu();
-    vscode.postMessage({ type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
+    const request = { type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) };
+    if (!state.browserMode) {
+      const attachments = [...images.map(image => image.name), ...(state.files ?? []).map(file => file.name)];
+      submission = { input: prompt.value, text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
+      prompt.value = '';
+      renderMessages();
+      el('cancel').hidden = false; el('send').hidden = true;
+      el('status').textContent = '質問を送信しています…';
+    }
+    vscode.postMessage(request);
   });
   prompt.addEventListener('keydown', event => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      const value = inputHistory.navigate(event.key === 'ArrowUp' ? 'up' : 'down', prompt.value, prompt.selectionStart, prompt.selectionEnd);
+      if (value !== undefined) {
+        event.preventDefault();
+        prompt.value = value;
+        prompt.setSelectionRange(value.length, value.length);
+      }
+    }
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
       event.preventDefault(); el('form').requestSubmit();
     }
   });
+  prompt.addEventListener('input', () => inputHistory.reset());
   function age(timestamp) {
     const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
     return minutes < 1 ? '今' : minutes < 60 ? `${minutes}分前` : minutes < 1440 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
   }
   window.addEventListener('message', event => {
     if (event.data.type !== 'state') return;
+    const wasStopping = stopping;
+    const previousChatId = state.activeChatId;
     state = event.data;
+    if (previousChatId !== state.activeChatId || !state.signedIn) filePreviewOpen.clear();
+    if (!state.signedIn || state.clearInput || (previousChatId !== state.activeChatId && !state.busy)) {
+      submission = undefined;
+    } else if (submission && !state.busy && (submission.status === 'sending' || submission.status === 'stopping')) {
+      submission.status = wasStopping ? 'stopped' : 'failed';
+      restoreSubmission();
+    }
+    if (previousChatId !== state.activeChatId || !state.signedIn) inputHistory.reset();
+    inputHistory.set(state.signedIn ? (state.inputHistory ?? state.messages.filter(message => message.role === 'user').map(message => message.content)) : []);
+    if (!state.signedIn || !state.busy) { stopping = false; pendingSubmission = false; }
     el('browser-help').hidden = !state.browserMode;
     el('send').title = state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
     el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
     el('options-summary').replaceChildren();
-    el('options-summary').hidden = !state.goal && !state.planMode;
+    el('options-summary').hidden = !state.goal && !state.planMode && !state.generationPath;
+    if (state.generationPath) {
+      const destination = document.createElement('button'); destination.type = 'button'; destination.className = 'option-chip';
+      destination.textContent = `生成先: ${state.generationPath}`; destination.title = '生成先を変更・解除'; destination.disabled = state.busy;
+      destination.addEventListener('click', () => vscode.postMessage({ type: 'generationPath' })); el('options-summary').append(destination);
+    }
     if (state.goal) {
       const goal = document.createElement('button'); goal.type = 'button'; goal.className = 'option-chip';
       goal.textContent = `目標: ${state.goal}`; goal.title = '目標を編集・解除'; goal.disabled = state.busy;
@@ -289,17 +440,6 @@
       : 'APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。';
     el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
     el('messages').hidden = state.showingHistory;
-    el('messages').replaceChildren();
-    for (const message of state.messages) {
-      const article = document.createElement('article');
-      article.className = message.role === 'user' ? 'user' : 'assistant';
-      const label = document.createElement('strong');
-      label.textContent = message.role === 'user' ? 'あなた' : '都立AI';
-      const content = document.createElement('pre');
-      content.textContent = message.content;
-      article.append(label, content);
-      el('messages').append(article);
-    }
     el('recent').hidden = !state.signedIn || (!state.showingHistory && (state.messages.length > 0 || !state.recent.length));
     el('history-empty').hidden = state.recent.length > 0;
     el('clear').hidden = !state.recent.length;
@@ -323,10 +463,42 @@
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
     el('cancel').hidden = !state.busy;
     el('send').hidden = state.busy;
-    el('status').textContent = state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
+    el('status').textContent = stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
+    const approval = el('operation-approval');
+    const request = state.approvalRequest;
+    approval.hidden = !request;
+    if (request && approval.dataset.requestId !== request.id) {
+      approval.dataset.requestId = request.id; approval.replaceChildren();
+      const eyebrow = document.createElement('span'); eyebrow.className = 'approval-eyebrow'; eyebrow.textContent = '許可が必要です';
+      const title = document.createElement('h3'); title.textContent = request.title;
+      const detail = document.createElement('p'); detail.className = 'approval-detail'; detail.textContent = request.detail;
+      approval.append(eyebrow, title, detail);
+      for (const file of request.files ?? []) {
+        const entry = document.createElement('details'); entry.className = 'approval-file';
+        const name = document.createElement('summary'); name.textContent = (typeof file.original === 'string' ? '編集 · ' : '') + file.path;
+        const code = document.createElement('pre'); code.textContent = filePreview(file);
+        entry.append(name, code); approval.append(entry);
+      }
+      const actions = document.createElement('div'); actions.className = 'approval-actions';
+      for (const allowed of [true, false]) {
+        const button = document.createElement('button'); button.type = 'button';
+        button.className = allowed ? 'primary' : 'text-button'; button.textContent = allowed ? '許可' : '拒否';
+        button.addEventListener('click', () => {
+          for (const item of actions.children) item.disabled = true;
+          vscode.postMessage({ type: 'approvalResponse', id: request.id, allowed });
+        });
+        actions.append(button);
+      }
+      approval.append(actions); el('content').scrollTop = el('content').scrollHeight;
+    } else if (!request) { approval.replaceChildren(); approval.dataset.requestId = ''; }
+    if (request) {
+      el('welcome').hidden = true; el('recent').hidden = true;
+      el('status').textContent = '操作内容を確認して、許可または拒否を選んでください。';
+    }
     el('error').textContent = state.error;
-    if (!state.signedIn || state.clearInput) { prompt.value = ''; context.checked = false; resetImages(); }
-    if (state.clearInput && state.signedIn && !state.busy) prompt.focus();
+    if (!state.signedIn || (state.clearInput && !wasStopping)) { prompt.value = ''; context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false; }
+    if ((state.clearInput || wasStopping) && state.signedIn && !state.busy) prompt.focus();
+    renderMessages();
     if (state.messages.length) el('content').scrollTop = el('content').scrollHeight;
   });
   vscode.postMessage({ type: 'ready' });

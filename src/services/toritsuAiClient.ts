@@ -1,6 +1,7 @@
 import { ClientConfig, Message } from '../types/ai';
 import { LlmClient } from './llmClient';
-import { ApiProtocol, OpenAiCompatibleProtocol } from './apiProtocol';
+import { ApiProtocol, OpenAiCompatibleProtocol, ToritsuPublicProtocol } from './apiProtocol';
+import { isToritsuPublicApi } from './toritsuPublicApi';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
 
@@ -8,12 +9,14 @@ export class ToritsuAiClient implements LlmClient {
   constructor(
     private readonly getConfig: () => ClientConfig,
     private readonly getApiKey: () => PromiseLike<string | undefined>,
-    private readonly protocol: ApiProtocol = new OpenAiCompatibleProtocol()
+    private readonly protocol?: ApiProtocol
   ) {}
 
   async complete(messages: readonly Message[], signal?: AbortSignal): Promise<string> {
     const config = this.getConfig();
-    if (!config.baseUrl.trim() || !config.model.trim()) {
+    const publicApi = isToritsuPublicApi(config);
+    const protocol = this.protocol ?? (publicApi ? new ToritsuPublicProtocol() : new OpenAiCompatibleProtocol());
+    if (!config.baseUrl.trim() || (!publicApi && !config.model.trim())) {
       throw new Error('設定で toritsuAI.baseUrl と toritsuAI.model を指定してください。');
     }
     let url: URL;
@@ -40,17 +43,17 @@ export class ToritsuAiClient implements LlmClient {
       ? Math.min(config.timeoutMs!, 600000) : 180000;
     const timer = setTimeout(cancel, timeoutMs);
     try {
-      const headers = this.protocol.headers(config, key);
+      const headers = protocol.headers(config, key);
       const response = await fetch(url, {
         method: 'POST', headers, redirect: 'error', signal: controller.signal,
-        body: JSON.stringify(this.protocol.request(config, messages))
+        body: JSON.stringify(protocol.request(config, messages))
       });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
       }
       const body: unknown = await response.json();
-      return this.protocol.response(body);
+      return protocol.response(body);
     } catch (error) {
       if (controller.signal.aborted) {
         throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
