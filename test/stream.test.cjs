@@ -63,8 +63,17 @@ test('受信済み表示は文字境界を維持し、停止できる', async ()
   const text='日本語🙂'.repeat(10), parts=[];
   await revealAnswer(text,new AbortController().signal,p=>parts.push(p));
   assert.equal(parts.join(''),text);assert.ok(parts.length>1);
+  assert.ok(parts.every(part=>Array.from(part).length<=4));
   const controller=new AbortController();
   await assert.rejects(revealAnswer(text,controller.signal,()=>controller.abort()));
+});
+
+test('長い回答でも一度に表示する文字数を増やさない', async () => {
+  const controller=new AbortController();const parts=[];
+  await assert.rejects(revealAnswer('日本語🙂'.repeat(5000),controller.signal,part=>{
+    parts.push(part);controller.abort();
+  }));
+  assert.deepEqual(parts,['日本語🙂']);
 });
 
 test('作成途中のJSONからコードだけを安全に表示する', () => {

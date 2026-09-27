@@ -967,7 +967,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             await revealAnswer(answer.slice(prefix), controller.signal, async delta => {
               await gate.wait(controller.signal);
               this.partialAnswer += delta;
-              if (Date.now() - lastPublish >= 40) { lastPublish = Date.now(); this.publish(); }
+              this.publish();
             });
           }
           await gate.wait(controller.signal);
@@ -2591,11 +2591,13 @@ import { setTimeout } from 'node:timers/promises';
 /** Non-streaming APIs are labelled as received before this display-only animation. */
 export async function revealAnswer(answer: string, signal: AbortSignal, onDelta: (text: string) => void | Promise<void>): Promise<void> {
   const chars = Array.from(answer);
-  const size = Math.max(8, Math.ceil(chars.length / 80));
+  // Keep a steady reading pace even for long answers; never enlarge chunks
+  // to fit the entire response into a short animation.
+  const size = 4;
   for (let offset = 0; offset < chars.length; offset += size) {
     if (signal.aborted) throw new Error('表示をキャンセルしました。');
     await onDelta(chars.slice(offset, offset + size).join(''));
-    if (offset + size < chars.length) await setTimeout(20, undefined, { signal });
+    if (offset + size < chars.length) await setTimeout(32, undefined, { signal });
   }
 }
 ````
@@ -5671,8 +5673,17 @@ test('受信済み表示は文字境界を維持し、停止できる', async ()
   const text='日本語🙂'.repeat(10), parts=[];
   await revealAnswer(text,new AbortController().signal,p=>parts.push(p));
   assert.equal(parts.join(''),text);assert.ok(parts.length>1);
+  assert.ok(parts.every(part=>Array.from(part).length<=4));
   const controller=new AbortController();
   await assert.rejects(revealAnswer(text,controller.signal,()=>controller.abort()));
+});
+
+test('長い回答でも一度に表示する文字数を増やさない', async () => {
+  const controller=new AbortController();const parts=[];
+  await assert.rejects(revealAnswer('日本語🙂'.repeat(5000),controller.signal,part=>{
+    parts.push(part);controller.abort();
+  }));
+  assert.deepEqual(parts,['日本語🙂']);
 });
 
 test('作成途中のJSONからコードだけを安全に表示する', () => {
@@ -8290,6 +8301,8 @@ VS Code 1.106以上のデスクトップ版に対応。開発・パッケージ�
 OpenAI互換APIでは `stream: true` で送信し、SSEで届いた文章・コードをチャットへ順次表示します。作成途中のファイルはファイル名とコードとして表示し、完成後に通常のファイルカードへ切り替えます。途中の文字列からファイルを作成・編集することはありません。
 
 現在の授業用APIの接続実装は一括応答です。この場合は回答の受信後に少しずつ表示し、画面には「回答を表示中（受信済み）」と表示します。これは表示上の演出であり、サーバーの生成途中を取得する機能ではありません。最初の応答待ち時間は短縮しません。
+
+受信後の表示は約32ミリ秒ごとに4文字ずつ進みます。長い回答でもまとめて表示せず、一時停止・再開できます。
 
 キー変更・チャットビュー破棄時は表示と通信を中断します。未完了の回答を成功した履歴として保存せず、ファイルにも適用しません。ストリーミング非対応のOpenAI互換APIでは `toritsuAI.streamResponses` をオフにしてください。失敗時の自動再送は行いません。
 

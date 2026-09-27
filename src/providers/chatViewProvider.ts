@@ -351,7 +351,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             await revealAnswer(answer.slice(prefix), controller.signal, async delta => {
               await gate.wait(controller.signal);
               this.partialAnswer += delta;
-              if (Date.now() - lastPublish >= 40) { lastPublish = Date.now(); this.publish(); }
+              this.publish();
             });
           }
           await gate.wait(controller.signal);
