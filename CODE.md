@@ -8,6 +8,8 @@
 toritsu-ai-vscode/
   package.json
   tsconfig.json
+  test/pause.test.cjs
+  src/services/pauseGate.ts
   test/stream.test.cjs
   src/services/revealAnswer.ts
   src/services/chatStream.ts
@@ -592,7 +594,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
-<button id="cancel" type="button" class="icon-button" title="停止して入力を編集" aria-label="停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
+<button id="cancel" type="button" class="icon-button" title="一時停止して入力を編集" aria-label="一時停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
 <button id="send" type="submit" class="send-button" title="送信（⌘ / Ctrl + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
 <p class="footnote">都立AI · 生成された内容は確認してから使用してください</p></footer>
 </div>
@@ -609,6 +611,7 @@ import { dirname } from 'node:path';
 import { BrowserHandoff, browserPrompt } from '../services/browserHandoff';
 import { LlmClient } from '../services/llmClient';
 import { Message } from '../types/ai';
+import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
 import { collectContext } from '../services/contextCollector';
 import { createGeneratedFiles, ExistingFilesNeedEditing, normalizeDestinationPath, parseGeneratedFiles } from '../services/generatedFiles';
@@ -644,6 +647,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private editor = vscode.window.activeTextEditor;
   private readonly subscriptions: vscode.Disposable[] = [];
   private viewSubscriptions: vscode.Disposable[] = [];
+  private generation?: { gate: PauseGate; input: string; signature: string; sessionKey: string };
+  private queuedSend?: unknown;
   private partialAnswer = '';
   private displayMode: 'live' | 'received' = 'live';
   private error = '';
@@ -671,6 +676,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       auth.onDidChange(() => {
         this.approvalPrompt.cancel();
         this.controller?.abort();
+        this.queuedSend = undefined; this.generation = undefined;
         this.partialAnswer = '';
         this.modelController?.abort();
         this.history.setAccount(auth.session?.accountId);
@@ -691,14 +697,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     view.webview.html = chatHtml(view.webview, media);
     this.viewSubscriptions = [
       view.webview.onDidReceiveMessage((message: unknown) => { void this.receive(message); }),
-      view.onDidDispose(() => { if (this.view === view) { this.approvalPrompt.cancel(); this.controller?.abort(); this.partialAnswer = ''; this.view = undefined; } })
+      view.onDidDispose(() => { if (this.view === view) { this.approvalPrompt.cancel(); this.controller?.abort(); this.queuedSend = undefined; this.partialAnswer = ''; this.view = undefined; } })
     ];
   }
 
   private publish(clearInput = false): void {
     const session = this.auth.session;
     void this.view?.webview.postMessage({
-      type: 'state', partialAnswer: session ? this.partialAnswer : '', displayMode: this.displayMode, browserMode: this.browser?.enabled ?? false, messages: session ? this.history.messages : [],
+      type: 'state', paused: !!session && !!this.generation?.gate.paused, canPause: !!this.generation && !this.approvalPrompt.current, partialAnswer: session ? this.partialAnswer : '', displayMode: this.displayMode, browserMode: this.browser?.enabled ?? false, messages: session ? this.history.messages : [],
       recent: session ? this.history.recent : [],
       inputHistory: session ? this.history.inputHistory : [],
       showingHistory: this.showingHistory, activeChatId: this.history.selectedId,
@@ -720,9 +726,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!raw || typeof raw !== 'object') return;
     const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown };
     if (message.type === 'ready') { this.publish(); return; }
+    if (message.type === 'pause' && this.generation && !this.approvalPrompt.current) {
+      this.generation.gate.pause(); this.error = ''; this.publish(); return;
+    }
+    if (message.type === 'send' && this.generation?.gate.paused && typeof message.text === 'string') {
+      if (this.auth.session?.key !== this.generation.sessionKey) return;
+      const signature = JSON.stringify([message.text, message.includeContext === true, message.images ?? []]);
+      if (signature === this.generation.signature) {
+        this.generation.gate.resume(); this.publish(); return;
+      }
+      this.queuedSend = raw;
+      this.controller?.abort(); this.generation.gate.resume(); this.publish(); return;
+    }
     if (message.type === 'cancel') { this.controller?.abort(); this.partialAnswer = ''; this.approvalPrompt.cancel(); this.publish(); return; }
     if (message.type === 'approvalResponse') { this.approvalPrompt.respond(message.id, message.allowed); return; }
     if (this.approvalPrompt.current && message.type !== 'logout') return;
+    let ownsGeneration = false;
     try {
       if (message.type === 'selectModel') {
         if (this.controller || this.changingModel) return;
@@ -892,6 +911,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (this.controller || this.changingModel) return;
       const controller = new AbortController();
       this.controller = controller;
+      ownsGeneration = true;
+      const gate = new PauseGate();
+      this.generation = { gate, input: message.text, signature: JSON.stringify([message.text, message.includeContext === true, message.images ?? []]), sessionKey: session.key };
       this.partialAnswer = ''; this.displayMode = 'live';
       this.error = ''; this.publish();
       try {
@@ -915,18 +937,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
         const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory });
         let lastPublish = 0;
+        let received = '';
         const showDelta = (delta: string) => {
           if (controller.signal.aborted || this.auth.session?.key !== session.key) return;
-          this.partialAnswer += delta;
+          received += delta;
+          if (gate.paused) return;
+          this.partialAnswer = received;
           if (Date.now() - lastPublish >= 40) { lastPublish = Date.now(); this.publish(); }
         };
         const receiveAnswer = async (messages: readonly Message[]) => {
-          this.partialAnswer = ''; this.displayMode = 'live'; lastPublish = 0;
-          const answer = await this.client.complete(messages, controller.signal, showDelta);
-          if (!this.partialAnswer && !controller.signal.aborted && this.auth.session?.key === session.key) {
+          this.partialAnswer = ''; this.displayMode = 'live'; lastPublish = 0; received = '';
+          let answer: string;
+          try { answer = await this.client.complete(messages, controller.signal, showDelta); }
+          catch (error) { await gate.wait(controller.signal); throw error; }
+          await gate.wait(controller.signal);
+          if (this.auth.session?.key !== session.key) throw new Error('接続先が変わりました。');
+          if (this.partialAnswer !== answer) {
             this.displayMode = 'received';
-            await revealAnswer(answer, controller.signal, showDelta);
+            const prefix = answer.startsWith(this.partialAnswer) ? this.partialAnswer.length : 0;
+            if (!prefix) this.partialAnswer = '';
+            await revealAnswer(answer.slice(prefix), controller.signal, async delta => {
+              await gate.wait(controller.signal);
+              this.partialAnswer += delta;
+              if (Date.now() - lastPublish >= 40) { lastPublish = Date.now(); this.publish(); }
+            });
           }
+          await gate.wait(controller.signal);
           return answer;
         };
         const answer = await receiveAnswer(request);
@@ -938,6 +974,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.showingHistory = false;
         const fileNote = this.files.length ? `\n\n[添付ファイル: ${this.files.map(file => file.name).join(', ')}。本文はこの送信のみ]` : '';
         const optionsNote = `${this.goal ? `\n[目標: ${this.goal}]` : ''}${this.planMode ? '\n[プランモード]' : ''}`;
+        this.generation = undefined;
         this.partialAnswer = '';
         this.history.append(historyText + sourceNote + fileNote + optionsNote, answer, message.text);
         this.sources = []; this.files = []; this.notice = '';
@@ -967,10 +1004,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             }
           }
         }
-      } finally { this.partialAnswer = ''; this.controller = undefined; }
+      } finally { this.generation = undefined; this.partialAnswer = ''; this.controller = undefined; }
     } catch (error) {
-      this.error = errorMessage(error);
-    } finally { this.publish(); }
+      if (!this.queuedSend) this.error = errorMessage(error);
+    } finally {
+      const queued = ownsGeneration ? this.queuedSend : undefined;
+      if (ownsGeneration) this.queuedSend = undefined;
+      if (queued) await this.receive(queued);
+      else this.publish();
+    }
   }
 
   showHistory(): void {
@@ -985,6 +1027,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   dispose(): void {
     this.approvalPrompt.cancel();
     this.controller?.abort();
+    this.queuedSend = undefined;
     this.modelController?.abort();
     [...this.subscriptions, ...this.viewSubscriptions].forEach(item => item.dispose());
   }
@@ -2493,16 +2536,41 @@ export async function readChatStream(response: Response, onDelta: OnDelta, signa
 
 ````typescript
 import { setTimeout } from 'node:timers/promises';
-import { OnDelta } from './llmClient';
 
 /** Non-streaming APIs are labelled as received before this display-only animation. */
-export async function revealAnswer(answer: string, signal: AbortSignal, onDelta: OnDelta): Promise<void> {
+export async function revealAnswer(answer: string, signal: AbortSignal, onDelta: (text: string) => void | Promise<void>): Promise<void> {
   const chars = Array.from(answer);
   const size = Math.max(8, Math.ceil(chars.length / 80));
   for (let offset = 0; offset < chars.length; offset += size) {
     if (signal.aborted) throw new Error('表示をキャンセルしました。');
-    onDelta(chars.slice(offset, offset + size).join(''));
+    await onDelta(chars.slice(offset, offset + size).join(''));
     if (offset + size < chars.length) await setTimeout(20, undefined, { signal });
+  }
+}
+````
+
+### src/services/pauseGate.ts
+
+````typescript
+/** Pauses local display/application; it does not promise to pause server computation. */
+export class PauseGate {
+  paused = false;
+  private listeners = new Set<() => void>();
+  pause(): void { this.paused = true; }
+  resume(): void {
+    this.paused = false;
+    for (const listener of [...this.listeners]) listener();
+  }
+  async wait(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new Error('処理を中断しました。');
+    if (!this.paused) return;
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => { this.listeners.delete(resume); signal.removeEventListener('abort', abort); };
+      const resume = () => { cleanup(); resolve(); };
+      const abort = () => { cleanup(); reject(new Error('処理を中断しました。')); };
+      this.listeners.add(resume);
+      signal.addEventListener('abort', abort, { once: true });
+    });
   }
 }
 ````
@@ -2891,7 +2959,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
       heading.append(label);
       if (message.role === 'user') {
         const badge = document.createElement('span'); badge.className = `message-status ${message.status || 'complete'}`;
-        badge.textContent = message.status === 'sending' && state.approvalRequest ? '確認待ち' : ({ sending: '送信中・回答待ち', stopping: '停止中', stopped: '停止しました', failed: '完了できませんでした' })[message.status] || '✓ 送信済み';
+        badge.textContent = message.status === 'sending' && state.approvalRequest ? '確認待ち' : ({ sending: '送信中・回答待ち', stopping: '一時停止中', paused: '一時停止', stopped: '停止しました', failed: '完了できませんでした' })[message.status] || '✓ 送信済み';
         heading.append(badge);
       }
       article.append(heading);
@@ -2905,10 +2973,10 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
       }
       el('messages').append(article);
     }
-    if ((submission?.status === 'sending' || state.partialAnswer) && !state.approvalRequest) {
+    if ((submission?.status === 'sending' || state.partialAnswer || state.paused) && !state.approvalRequest) {
       const waiting = document.createElement('article'); waiting.className = 'assistant response-waiting';
       const label = document.createElement('strong'); label.textContent = '都立AI';
-      const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = state.partialAnswer ? (state.displayMode === 'received' ? '回答を表示中（受信済み）…' : '生成中…') : '回答を待っています…';
+      const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = state.paused ? '一時停止中 — 内容を変えずに送信すると再開します' : state.partialAnswer ? (state.displayMode === 'received' ? '回答を表示中（受信済み）…' : '生成中…') : '回答を待っています…';
       waiting.append(label, content);
       if (state.partialAnswer) {
         const preview = document.createElement('pre'); preview.className = 'streaming-preview';
@@ -2928,7 +2996,8 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
   function syncControls() {
     const disabled = !state.signedIn || state.busy || state.changingModel || reading;
     for (const id of ['send', 'attach', 'prompt', 'context', 'load-links']) el(id).disabled = disabled;
-    if (stopping && state.signedIn) prompt.disabled = false;
+    if ((stopping || state.paused) && state.signedIn) prompt.disabled = false;
+    if (state.paused && state.signedIn) el('send').disabled = false;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     for (const button of el('attachments').querySelectorAll('button')) button.disabled = state.busy || reading;
   }
@@ -3112,15 +3181,15 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
         renderMessages();
         syncControls();
         prompt.focus();
-        el('status').textContent = '停止しています…入力を編集できます。';
+        el('status').textContent = state.canPause ? '一時停止しています…入力を編集できます。' : '停止しています…';
       }
-      vscode.postMessage({ type: action });
+      vscode.postMessage({ type: action === 'cancel' && state.canPause ? 'pause' : action });
     });
   }
   el('form').addEventListener('submit', event => {
     event.preventDefault();
-    if (!state.signedIn || state.busy || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
-    state.busy = true;
+    if (!state.signedIn || (state.busy && !state.paused) || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
+    state.busy = true; state.paused = false;
     pendingSubmission = true;
     stopping = false;
     inputHistory.reset();
@@ -3159,7 +3228,10 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     if (event.data.type !== 'state') return;
     const wasStopping = stopping;
     const previousChatId = state.activeChatId;
+    const wasPaused = state.paused;
     state = event.data;
+    if (state.paused && submission) { submission.status = 'paused'; restoreSubmission(); stopping = false; }
+    else if (wasPaused && state.busy && submission) submission.status = 'sending';
     if (previousChatId !== state.activeChatId || !state.signedIn) filePreviewOpen.clear();
     if (!state.signedIn || state.clearInput || (previousChatId !== state.activeChatId && !state.busy)) {
       submission = undefined;
@@ -3171,7 +3243,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     inputHistory.set(state.signedIn ? (state.inputHistory ?? state.messages.filter(message => message.role === 'user').map(message => message.content)) : []);
     if (!state.signedIn || !state.busy) { stopping = false; pendingSubmission = false; }
     el('browser-help').hidden = !state.browserMode;
-    el('send').title = state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
+    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
     el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
@@ -3274,9 +3346,11 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     }
     syncControls();
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
-    el('cancel').hidden = !state.busy;
-    el('send').hidden = state.busy;
-    el('status').textContent = stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
+    el('cancel').hidden = !state.busy || state.paused;
+    el('cancel').title = state.canPause ? '一時停止して入力を編集' : '処理を停止';
+    el('cancel').setAttribute('aria-label', el('cancel').title);
+    el('send').hidden = state.busy && !state.paused;
+    el('status').textContent = state.paused ? '一時停止中。送信で再開、内容を変更して送信すると考え直します。API側の処理は続く場合があります。' : stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
     const approval = el('operation-approval');
     const request = state.approvalRequest;
     approval.hidden = !request;
@@ -4807,6 +4881,48 @@ test('生成中に停止したら遅い差分・履歴・ファイル適用を�
   await provider.receive({type:'cancel'});finish();await pending;
   assert.equal(state().partialAnswer,'');assert.equal(state().messages.length,0);
 });
+
+test('一時停止は通信を中断せず、途中表示を保持し、同じ入力ならAPI再送なしで再開', async t => {
+  let finish, signal, delta, calls=0;
+  const {provider,state}=setup(t,async (_messages,s,onDelta)=>{
+    calls++;signal=s;delta=onDelta;onDelta('途中');
+    await new Promise(r=>{finish=r;});return '途中と続き';
+  });
+  const request={type:'send',text:'説明して',images:[],includeContext:false};
+  const pending=provider.receive(request);
+  while(!finish) await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});
+  assert.equal(state().paused,true);assert.equal(state().partialAnswer,'途中');assert.equal(signal.aborted,false);
+  delta('と続き');finish();await new Promise(r=>setImmediate(r));
+  assert.equal(state().partialAnswer,'途中');assert.equal(state().messages.length,0);assert.equal(state().error,'');
+  await provider.receive(request);await pending;
+  assert.equal(calls,1);assert.equal(state().paused,false);assert.equal(state().messages.at(-1).content,'途中と続き');
+});
+
+test('一時停止中に入力を変更して送信すると古い生成を破棄して考え直す',async t=>{
+  let finish, oldSignal;const inputs=[];
+  const {provider,state}=setup(t,async (messages,signal,onDelta)=>{
+    inputs.push(messages.at(-1).content);
+    if(inputs.length===1){oldSignal=signal;onDelta('古い途中');await new Promise(r=>{finish=r;});onDelta('遅い古い結果');return '古い完成';}
+    return '新しい完成';
+  });
+  const pending=provider.receive({type:'send',text:'古い依頼'});
+  while(!finish) await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});
+  await provider.receive({type:'send',text:'修正した依頼'});
+  assert.equal(oldSignal.aborted,true);finish();await pending;
+  assert.deepEqual(inputs,['古い依頼','修正した依頼']);
+  assert.equal(state().messages.length,2);assert.equal(state().messages.at(-1).content,'新しい完成');assert.equal(state().error,'');
+});
+
+test('一時停止中のキー削除では途中回答と再開待ちを破棄',async t=>{
+  let finish;
+  const {provider,state,logout}=setup(t,async (_m,_s,onDelta)=>{onDelta('秘密の途中');await new Promise(r=>{finish=r;});return '秘密の完成';});
+  const pending=provider.receive({type:'send',text:'質問'});
+  while(!finish)await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});logout();finish();await pending;
+  assert.equal(state().paused,false);assert.equal(state().partialAnswer,'');assert.deepEqual(state().messages,[]);
+});
 ````
 
 ### test/links.test.cjs
@@ -5352,6 +5468,31 @@ test('作成途中のJSONからコードだけを安全に表示する', () => {
   assert.equal(streamingPreview(prefix+'const x = 1;\\n次の行'), '候補です\nmain.ts\nconst x = 1;\n次の行');
   assert.equal(streamingPreview(prefix+'abc\\u65'), '候補です\nmain.ts\nabc');
   assert.equal(streamingPreview('<script>alert(1)</script>'),'<script>alert(1)</script>');
+});
+````
+
+### test/pause.test.cjs
+
+````javascript
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { PauseGate } = require('../dist/services/pauseGate');
+const { revealAnswer } = require('../dist/services/revealAnswer');
+
+test('受信済み回答の表示も一時停止位置から再開する', async () => {
+  const gate=new PauseGate(), controller=new AbortController();let shown='';
+  const text='abcdefgh'.repeat(5);
+  const pending=revealAnswer(text,controller.signal,async delta=>{
+    await gate.wait(controller.signal);shown+=delta;if(shown.length===8)gate.pause();
+  });
+  while(!gate.paused)await new Promise(r=>setImmediate(r));
+  await new Promise(r=>setTimeout(r,40));assert.equal(shown,'abcdefgh');
+  gate.resume();await pending;assert.equal(shown,text);
+});
+
+test('破棄すると一時停止の待機も解除する',async()=>{
+  const gate=new PauseGate(),controller=new AbortController();gate.pause();
+  const wait=gate.wait(controller.signal);controller.abort();await assert.rejects(wait,/中断/);
 });
 ````
 
@@ -7889,6 +8030,15 @@ test('作成途中のJSONからコードだけを安全に表示する', () => {
 ````markdown
 # 都立AI VS Code Extension
 
+## 一時停止・再開・依頼の変更
+
+回答生成中の停止ボタンは一時停止として動作します。途中の回答と入力内容を残し、チャットの表示と回答の確定・ファイル適用を止めます。入力を変えずに送信すると同じリクエストの続きを表示し、入力を変更して送信すると古い生成結果を破棄して新しい依頼で生成し直します。編集中は送信ボタンを押すまで新しいAPIリクエストを送りません。
+
+一時停止は拡張側の表示・適用を止める機能です。APIにはサーバー計算を一時停止する制御を確認できていないため、停止中も通信・生成・利用回数や料金の計上が続く場合があります。受信済みの回答はメモリ上に保持し、再開するまで履歴へ確定したりファイルへ適用したりしません。APIのエラー・タイムアウトが発生した場合は、再開時にエラーを表示します。
+
+キー変更、ビュー破棄、VS Code終了では途中状態を破棄します。ファイル操作・資料読込・承認待ちの停止は従来の中断操作です。適用済みの編集を停止ボタンで巻き戻すことはありません。
+
+
 TypeScript / VS Code Extension APIによるコード説明、選択範囲の自然言語編集、サイドバーチャット。
 VS Code 1.106以上のデスクトップ版に対応。開発・パッケージ作成にはNode.js 22以上とnpmを使用します。
 
@@ -7898,7 +8048,7 @@ OpenAI互換APIでは `stream: true` で送信し、SSEで届いた文章・コ�
 
 現在の授業用APIの接続実装は一括応答です。この場合は回答の受信後に少しずつ表示し、画面には「回答を表示中（受信済み）」と表示します。これは表示上の演出であり、サーバーの生成途中を取得する機能ではありません。最初の応答待ち時間は短縮しません。
 
-停止・キー変更・チャットビュー破棄時は表示と通信を中断します。未完了の回答を成功した履歴として保存せず、ファイルにも適用しません。ストリーミング非対応のOpenAI互換APIでは `toritsuAI.streamResponses` をオフにしてください。失敗時の自動再送は行いません。
+キー変更・チャットビュー破棄時は表示と通信を中断します。未完了の回答を成功した履歴として保存せず、ファイルにも適用しません。ストリーミング非対応のOpenAI互換APIでは `toritsuAI.streamResponses` をオフにしてください。失敗時の自動再送は行いません。
 
 SSEの改行とUTF-8の処理は [HTML Standard](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation) を参照しています。実サービスでのストリーミングは未検証です。
 
@@ -7954,7 +8104,7 @@ AIのファイル生成用JSONを、そのまま表示せずファイル名・�
 
 ## 送信状態の表示
 
-送信すると質問がすぐ会話欄に移動し、「送信中・回答待ち」と待機表示が出ます。回答を受信すると「✓ 送信済み」へ切り替わります。停止・失敗した場合はその状態を質問に表示し、入力欄へ元の文章を戻すので編集して再送できます。停止後に編集した文章は上書きしません。
+送信すると質問がすぐ会話欄に移動し、「送信中・回答待ち」と待機表示が出ます。回答を受信すると「✓ 送信済み」へ切り替わります。一時停止・失敗した場合はその状態を質問に表示し、入力欄へ元の文章を戻すので編集して再送できます。停止後に編集した文章は上書きしません。
 
 ## 生成先パスを指定
 
@@ -7970,7 +8120,7 @@ AIのファイル生成用JSONを、そのまま表示せずファイル名・�
 
 入力欄の先頭行で **↑** を押すと、現在の会話の直前の質問を呼び出せます。続けて↑で以前の質問へ、↓で新しい質問へ移動し、最後には呼び出し前の下書きへ戻ります。日本語変換中・文字選択中は履歴へ移動しません。複数行の2行目以降では通常どおりカーソルが動きます。新しく保存した質問は添付ファイル名などの補足を除いた元の入力を呼び出します。
 
-応答待ち中に **停止ボタン（■）** を押すと、送信した入力が残ったまま編集できます。停止処理が終わると再送できます。中断したリクエストの遅い回答は会話へ追加せず、編集中の文章も消しません。
+応答待ち中に **停止ボタン（■）** を押すと一時停止し、途中の回答と入力を残したまま編集できます。同じ内容を送れば続きの表示を再開し、変更して送れば新しい内容で生成し直します。
 
 ## ファイルを作成
 

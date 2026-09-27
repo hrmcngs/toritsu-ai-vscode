@@ -213,3 +213,45 @@ test('生成中に停止したら遅い差分・履歴・ファイル適用を�
   await provider.receive({type:'cancel'});finish();await pending;
   assert.equal(state().partialAnswer,'');assert.equal(state().messages.length,0);
 });
+
+test('一時停止は通信を中断せず、途中表示を保持し、同じ入力ならAPI再送なしで再開', async t => {
+  let finish, signal, delta, calls=0;
+  const {provider,state}=setup(t,async (_messages,s,onDelta)=>{
+    calls++;signal=s;delta=onDelta;onDelta('途中');
+    await new Promise(r=>{finish=r;});return '途中と続き';
+  });
+  const request={type:'send',text:'説明して',images:[],includeContext:false};
+  const pending=provider.receive(request);
+  while(!finish) await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});
+  assert.equal(state().paused,true);assert.equal(state().partialAnswer,'途中');assert.equal(signal.aborted,false);
+  delta('と続き');finish();await new Promise(r=>setImmediate(r));
+  assert.equal(state().partialAnswer,'途中');assert.equal(state().messages.length,0);assert.equal(state().error,'');
+  await provider.receive(request);await pending;
+  assert.equal(calls,1);assert.equal(state().paused,false);assert.equal(state().messages.at(-1).content,'途中と続き');
+});
+
+test('一時停止中に入力を変更して送信すると古い生成を破棄して考え直す',async t=>{
+  let finish, oldSignal;const inputs=[];
+  const {provider,state}=setup(t,async (messages,signal,onDelta)=>{
+    inputs.push(messages.at(-1).content);
+    if(inputs.length===1){oldSignal=signal;onDelta('古い途中');await new Promise(r=>{finish=r;});onDelta('遅い古い結果');return '古い完成';}
+    return '新しい完成';
+  });
+  const pending=provider.receive({type:'send',text:'古い依頼'});
+  while(!finish) await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});
+  await provider.receive({type:'send',text:'修正した依頼'});
+  assert.equal(oldSignal.aborted,true);finish();await pending;
+  assert.deepEqual(inputs,['古い依頼','修正した依頼']);
+  assert.equal(state().messages.length,2);assert.equal(state().messages.at(-1).content,'新しい完成');assert.equal(state().error,'');
+});
+
+test('一時停止中のキー削除では途中回答と再開待ちを破棄',async t=>{
+  let finish;
+  const {provider,state,logout}=setup(t,async (_m,_s,onDelta)=>{onDelta('秘密の途中');await new Promise(r=>{finish=r;});return '秘密の完成';});
+  const pending=provider.receive({type:'send',text:'質問'});
+  while(!finish)await new Promise(r=>setImmediate(r));
+  await provider.receive({type:'pause'});logout();finish();await pending;
+  assert.equal(state().paused,false);assert.equal(state().partialAnswer,'');assert.deepEqual(state().messages,[]);
+});

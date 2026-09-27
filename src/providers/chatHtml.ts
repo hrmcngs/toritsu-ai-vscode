@@ -70,7 +70,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
-<button id="cancel" type="button" class="icon-button" title="停止して入力を編集" aria-label="停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
+<button id="cancel" type="button" class="icon-button" title="一時停止して入力を編集" aria-label="一時停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
 <button id="send" type="submit" class="send-button" title="送信（⌘ / Ctrl + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
 <p class="footnote">都立AI · 生成された内容は確認してから使用してください</p></footer>
 </div>
