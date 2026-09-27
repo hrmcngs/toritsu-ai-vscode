@@ -69,3 +69,16 @@ test('授業用APIは会話履歴を含め、画像・不正な応答は明確�
   ]), /画像添付/);
   assert.equal(fetch.mock.callCount(), 0);
 });
+
+test('通常チャットの固定指示を簡潔に保ち、質問や添付本文は削らない', () => {
+  const { chatPrompt } = require('../dist/services/promptBuilder');
+  const short = chatPrompt([], 'こんにちは');
+  assert.ok(short[0].content.length < 500);
+  assert.equal(short.at(-1).content, 'こんにちは');
+  assert.match(short[0].content, /toritsu-files/);
+  assert.match(short[0].content, /original/);
+  const context = {filePath:'/test.ts',language:'typescript',fullText:'full file',selectedText:'file'};
+  const withFile=chatPrompt([], '変更して', context);
+  assert.deepEqual(JSON.parse(withFile.at(-1).content).context, context);
+  assert.doesNotMatch(chatPrompt([], '計画して', undefined, [], [], {planMode:true})[0].content, /toritsu-files/);
+});
