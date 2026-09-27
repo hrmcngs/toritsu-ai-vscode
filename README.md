@@ -368,3 +368,40 @@ API提供元のURLとキーを設定し、モデル一覧から選択してく�
 - 選択編集の `beforeApply` フックを使って差分確認画面を表示し、現在のバージョン検証後に適用する。
 - `LlmClient` のラッパーで監査ログを集約する。本文やキーは保存せず、利用規定に合わせて結果・時間など必要最小限の記録を扱う。現在、監査ログ送信は行わない。
 - 閉域向けゲートウェイや正式な都立AI認証はクライアント層に実装し、画面・コマンドから切り離す。
+
+## A1専用クライアント（正式API仕様未確認）
+
+A1は、ここで利用している都立学校の授業用APIと同一のAPIとは扱いません。A1の詳細仕様は未確認のため、`A1Client.chat()` と独立したアダプターを追加しています。既存チャットの接続先をA1へ自動変更する機能ではありません。A1への実接続は未検証です。
+
+- 型: `src/types/a1.ts`
+- 呼び出し・モード別コンテキスト制御: `src/services/a1/client.ts`
+- 仮の通信形式: `src/services/a1/adapter.ts`
+- VS Code設定・SecretStorageからの注入: `src/services/a1/settings.ts`
+
+`toritsuAI.a1` 配下に `baseUrl`, `chatEndpoint`, `authHeader`, `authPrefix`, `fastModel`, `reasoningModel`, `timeoutMs` を設定します。接続先とモデルには架空のA1既定値を設定していません。提供元で利用可能な値を指定してください。認証キーは `toritsuAI.a1.apiKey` という専用SecretStorage項目に保存し、授業用キーを流用しません。
+
+拡張コードからの使用例（`context` は `vscode.ExtensionContext`）:
+
+```ts
+import * as vscode from 'vscode';
+import { A1_API_KEY_SECRET, createA1Client } from './services/a1/settings';
+
+export async function exampleA1(context: vscode.ExtensionContext): Promise<string | undefined> {
+  const key = await vscode.window.showInputBox({ prompt: 'A1接続先のAPIキー', password: true, ignoreFocusOut: true });
+  if (!key?.trim()) return;
+  await context.secrets.store(A1_API_KEY_SECRET, key.trim());
+  const client = createA1Client(context.secrets);
+  return client.chat({
+    messages: [{ role: 'user', content: 'この関数の設計を検討してください。' }],
+    mode: 'reasoning', temperature: 0.2, maxTokens: 4096
+  });
+}
+```
+
+`fast` はfastModel・16,000文字・既定出力1,024トークン、`reasoning` はreasoningModel・64,000文字・既定出力4,096トークンを使用します。これはアプリの方針でありA1公式の制限やモードではありません。fastModelには軽量モデル、reasoningModelには高性能モデルを管理者が設定します。性能・応答時間は実際のモデルとサービスに依存します。`model` や `maxTokens` をリクエストで明示すると既定値を上書きします。
+
+コンテキスト超過時は古い会話から削除し、system指示と最新の依頼を保持します。それでも収まらない場合はエラーにし、コード本文を途中で切りません。仮アダプターはOpenAI互換JSONを送信し、架空の `mode` パラメータは送りません。ストリーミングは実装していません。
+
+正式仕様が分かったら `A1Adapter` の認証・request・responseを実装して `createA1Client(secrets, adapter)` に注入できます。アダプターには解決済みのmodeも渡るため、公式modeパラメータがある場合に変換できます。URL等は設定注入を維持します。正式ストリーミング対応には、その仕様に合わせた通信処理の追加も必要です。
+
+提示されたA1のデータ非学習・情報管理の前提は、任意のOpenAI互換接続先に自動的に当てはまるものではありません。実際の接続先の利用条件、入力データの扱い、運用ルールを確認してください。

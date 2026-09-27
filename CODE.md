@@ -267,6 +267,50 @@ toritsu-ai-vscode/
           "default": true,
           "scope": "machine",
           "description": "OpenAI互換APIの回答をストリーミングで受信します。非対応の接続先ではオフにしてください。授業用APIは一括受信後に順次表示します。"
+        },
+        "toritsuAI.a1.baseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): baseUrl"
+        },
+        "toritsuAI.a1.chatEndpoint": {
+          "type": "string",
+          "default": "/v1/chat/completions",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): chatEndpoint"
+        },
+        "toritsuAI.a1.authHeader": {
+          "type": "string",
+          "default": "Authorization",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): authHeader"
+        },
+        "toritsuAI.a1.authPrefix": {
+          "type": "string",
+          "default": "Bearer",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): authPrefix"
+        },
+        "toritsuAI.a1.fastModel": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): fastModel"
+        },
+        "toritsuAI.a1.reasoningModel": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): reasoningModel"
+        },
+        "toritsuAI.a1.timeoutMs": {
+          "type": "number",
+          "default": 180000,
+          "scope": "machine",
+          "description": "A1 adapter configuration (OpenAI-compatible placeholder): timeoutMs",
+          "minimum": 1,
+          "maximum": 600000
         }
       }
     }
@@ -8836,6 +8880,43 @@ API提供元のURLとキーを設定し、モデル一覧から選択してく�
 - 選択編集の `beforeApply` フックを使って差分確認画面を表示し、現在のバージョン検証後に適用する。
 - `LlmClient` のラッパーで監査ログを集約する。本文やキーは保存せず、利用規定に合わせて結果・時間など必要最小限の記録を扱う。現在、監査ログ送信は行わない。
 - 閉域向けゲートウェイや正式な都立AI認証はクライアント層に実装し、画面・コマンドから切り離す。
+
+## A1専用クライアント（正式API仕様未確認）
+
+A1は、ここで利用している都立学校の授業用APIと同一のAPIとは扱いません。A1の詳細仕様は未確認のため、`A1Client.chat()` と独立したアダプターを追加しています。既存チャットの接続先をA1へ自動変更する機能ではありません。A1への実接続は未検証です。
+
+- 型: `src/types/a1.ts`
+- 呼び出し・モード別コンテキスト制御: `src/services/a1/client.ts`
+- 仮の通信形式: `src/services/a1/adapter.ts`
+- VS Code設定・SecretStorageからの注入: `src/services/a1/settings.ts`
+
+`toritsuAI.a1` 配下に `baseUrl`, `chatEndpoint`, `authHeader`, `authPrefix`, `fastModel`, `reasoningModel`, `timeoutMs` を設定します。接続先とモデルには架空のA1既定値を設定していません。提供元で利用可能な値を指定してください。認証キーは `toritsuAI.a1.apiKey` という専用SecretStorage項目に保存し、授業用キーを流用しません。
+
+拡張コードからの使用例（`context` は `vscode.ExtensionContext`）:
+
+```ts
+import * as vscode from 'vscode';
+import { A1_API_KEY_SECRET, createA1Client } from './services/a1/settings';
+
+export async function exampleA1(context: vscode.ExtensionContext): Promise<string | undefined> {
+  const key = await vscode.window.showInputBox({ prompt: 'A1接続先のAPIキー', password: true, ignoreFocusOut: true });
+  if (!key?.trim()) return;
+  await context.secrets.store(A1_API_KEY_SECRET, key.trim());
+  const client = createA1Client(context.secrets);
+  return client.chat({
+    messages: [{ role: 'user', content: 'この関数の設計を検討してください。' }],
+    mode: 'reasoning', temperature: 0.2, maxTokens: 4096
+  });
+}
+```
+
+`fast` はfastModel・16,000文字・既定出力1,024トークン、`reasoning` はreasoningModel・64,000文字・既定出力4,096トークンを使用します。これはアプリの方針でありA1公式の制限やモードではありません。fastModelには軽量モデル、reasoningModelには高性能モデルを管理者が設定します。性能・応答時間は実際のモデルとサービスに依存します。`model` や `maxTokens` をリクエストで明示すると既定値を上書きします。
+
+コンテキスト超過時は古い会話から削除し、system指示と最新の依頼を保持します。それでも収まらない場合はエラーにし、コード本文を途中で切りません。仮アダプターはOpenAI互換JSONを送信し、架空の `mode` パラメータは送りません。ストリーミングは実装していません。
+
+正式仕様が分かったら `A1Adapter` の認証・request・responseを実装して `createA1Client(secrets, adapter)` に注入できます。アダプターには解決済みのmodeも渡るため、公式modeパラメータがある場合に変換できます。URL等は設定注入を維持します。正式ストリーミング対応には、その仕様に合わせた通信処理の追加も必要です。
+
+提示されたA1のデータ非学習・情報管理の前提は、任意のOpenAI互換接続先に自動的に当てはまるものではありません。実際の接続先の利用条件、入力データの扱い、運用ルールを確認してください。
 ````
 
 ## 6. 実行方法
@@ -8908,5 +8989,178 @@ export async function codingContext(root: string, activePath?: string, signal?: 
     }
   }
   return files;
+}
+````
+
+
+### src/types/a1.ts
+
+````ts
+export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+export type A1Mode = 'fast' | 'reasoning';
+
+export interface A1ChatRequest {
+  messages: ChatMessage[];
+  mode?: A1Mode;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export interface A1Client {
+  chat(req: A1ChatRequest, signal?: AbortSignal): Promise<string>;
+}
+
+export interface A1Config {
+  baseUrl: string;
+  chatEndpoint: string;
+  authHeader: string;
+  authPrefix: string;
+  fastModel: string;
+  reasoningModel: string;
+  timeoutMs: number;
+}
+
+export interface PreparedA1Request extends A1ChatRequest {
+  mode: A1Mode;
+  model: string;
+  maxTokens: number;
+}
+````
+
+
+### src/services/a1/settings.ts
+
+````ts
+import * as vscode from 'vscode';
+import { A1Client, A1Config } from '../../types/a1';
+import { ConfigurableA1Client } from './client';
+import { A1Adapter } from './adapter';
+
+export const A1_API_KEY_SECRET = 'toritsuAI.a1.apiKey';
+
+export function getA1Config(): A1Config {
+  const settings = vscode.workspace.getConfiguration('toritsuAI.a1');
+  return {
+    baseUrl: settings.get<string>('baseUrl', ''),
+    chatEndpoint: settings.get<string>('chatEndpoint', '/v1/chat/completions'),
+    authHeader: settings.get<string>('authHeader', 'Authorization'),
+    authPrefix: settings.get<string>('authPrefix', 'Bearer'),
+    fastModel: settings.get<string>('fastModel', ''),
+    reasoningModel: settings.get<string>('reasoningModel', ''),
+    timeoutMs: settings.get<number>('timeoutMs', 180000)
+  };
+}
+
+/** Separate secret namespace: never send a classroom API key to an A1 endpoint. */
+export function createA1Client(secrets: vscode.SecretStorage, adapter?: A1Adapter): A1Client {
+  return new ConfigurableA1Client(getA1Config, () => secrets.get(A1_API_KEY_SECRET), adapter);
+}
+````
+
+
+### src/services/a1/client.ts
+
+````ts
+import { A1ChatRequest, A1Client, A1Config, A1Mode, ChatMessage, PreparedA1Request } from '../../types/a1';
+import { ToritsuAiClient } from '../toritsuAiClient';
+import { A1Adapter, OpenAiA1Adapter } from './adapter';
+
+/** Application budgets in Unicode characters, not model token limits. */
+export const A1_MODE_POLICY = {
+  fast: { contextChars: 16000, maxTokens: 1024 },
+  reasoning: { contextChars: 64000, maxTokens: 4096 }
+} as const;
+
+export function prepareA1Request(req: A1ChatRequest, config: A1Config): PreparedA1Request {
+  const mode: A1Mode = req.mode ?? 'fast';
+  if (mode !== 'fast' && mode !== 'reasoning') throw new Error('A1のmodeはfastまたはreasoningを指定してください。');
+  const model = (req.model ?? (mode === 'fast' ? config.fastModel : config.reasoningModel)).trim();
+  if (!model) throw new Error(`A1の${mode}用モデルを設定してください。`);
+  if (!req.messages.length || req.messages.some(m => !['system', 'user', 'assistant'].includes(m.role) || typeof m.content !== 'string')) {
+    throw new Error('A1へのメッセージが不正です。');
+  }
+  if (req.messages.at(-1)?.role !== 'user') throw new Error('A1への最後のメッセージはユーザーの依頼にしてください。');
+  if (req.temperature !== undefined && (!Number.isFinite(req.temperature) || req.temperature < 0 || req.temperature > 2)) {
+    throw new Error('temperatureは0〜2で指定してください。');
+  }
+  const maxTokens = req.maxTokens ?? A1_MODE_POLICY[mode].maxTokens;
+  if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) throw new Error('maxTokensは正の整数で指定してください。');
+  const messages: ChatMessage[] = req.messages.map(m => ({ ...m }));
+  const length = () => messages.reduce((n, m) => n + Array.from(m.content).length, 0);
+  // Keep system instructions and the latest user request intact. Remove complete
+  // old turns instead of truncating source code or leaving an orphaned answer.
+  while (length() > A1_MODE_POLICY[mode].contextChars) {
+    const first = messages.findIndex((m, i) => m.role !== 'system' && i < messages.length - 1);
+    if (first < 0) throw new Error(`A1の${mode}用コンテキスト上限を超えています。依頼や添付を短くしてください。`);
+    messages.splice(first, 1);
+    while (messages[first]?.role === 'assistant') messages.splice(first, 1);
+  }
+  return { ...req, messages, mode, model, maxTokens };
+}
+
+export class ConfigurableA1Client implements A1Client {
+  constructor(private readonly getConfig: () => A1Config,
+    private readonly getApiKey: () => PromiseLike<string | undefined>,
+    private readonly adapter: A1Adapter = new OpenAiA1Adapter()) {}
+
+  async chat(req: A1ChatRequest, signal?: AbortSignal): Promise<string> {
+    const config = { ...this.getConfig() };
+    // TODO(A1 API): supply the official baseUrl and chatEndpoint when confirmed.
+    let url: URL;
+    try { url = new URL(config.baseUrl); }
+    catch { throw new Error('A1のHTTPS接続先を設定してください。'); }
+    if (url.protocol !== 'https:') throw new Error('A1の通信にはHTTPSが必要です。');
+    if (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0 || config.timeoutMs > 600000) {
+      throw new Error('A1のtimeoutMsは0より大きく600000以下にしてください。');
+    }
+    const prepared = prepareA1Request(req, config);
+    const adapter = this.adapter;
+    // Reuse the existing transport boundary: timeout, abort, HTTPS URL validation,
+    // redirect refusal, and errors that do not expose credentials or server text.
+    // Authentication remains in the adapter and the key is resolved only at send time.
+    const protocol = {
+      headers: (_unused: unknown, key: string) => adapter.headers(config, key),
+      request: () => adapter.request(config, prepared),
+      response: (body: unknown) => adapter.response(body)
+    };
+    return new ToritsuAiClient(() => ({ baseUrl: config.baseUrl, chatEndpoint: config.chatEndpoint,
+      authHeader: config.authHeader, apiKeyPrefix: config.authPrefix, model: prepared.model,
+      timeoutMs: config.timeoutMs }), this.getApiKey, protocol).complete(prepared.messages, signal);
+  }
+}
+````
+
+
+### src/services/a1/adapter.ts
+
+````ts
+import { A1Config, PreparedA1Request } from '../../types/a1';
+import { OpenAiCompatibleProtocol } from '../apiProtocol';
+
+/** Only this boundary knows the service's wire format. */
+export interface A1Adapter {
+  headers(config: A1Config, apiKey: string): Headers;
+  request(config: A1Config, request: PreparedA1Request): unknown;
+  response(body: unknown): string;
+}
+
+/** Placeholder protocol, not a claim of compatibility with the official A1 API. */
+export class OpenAiA1Adapter implements A1Adapter {
+  // TODO(A1 API): confirm official authentication, request/response and mode fields.
+  headers(config: A1Config, apiKey: string): Headers {
+    return new Headers({ 'Content-Type': 'application/json', Accept: 'application/json',
+      [config.authHeader]: [config.authPrefix.trim(), apiKey].filter(Boolean).join(' ') });
+  }
+
+  request(_config: A1Config, request: PreparedA1Request): unknown {
+    // mode is an application concept; do not send an invented official parameter.
+    return { model: request.model, messages: request.messages,
+      temperature: request.temperature ?? 0.2, max_tokens: request.maxTokens };
+  }
+
+  response(body: unknown): string {
+    return new OpenAiCompatibleProtocol().response(body);
+  }
 }
 ````
