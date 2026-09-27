@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { API_KEY_SECRET } from './toritsuAiClient';
 import { TORITSU_API_BASE, TORITSU_API_PATH } from './toritsuPublicApi';
 
+export const CONNECTION_SETUP_NOTICE = '接続設定を閉じました。保存済みのAPIキー・設定は保持しています。接続先が未設定の場合は「接続設定」から再開してください。';
+export class ConnectionSetupCancelled extends Error {}
+
 export class ConnectionSetup {
   private active = false;
   constructor(private readonly secrets: vscode.SecretStorage) {}
@@ -12,7 +15,7 @@ export class ConnectionSetup {
     const cancellation = new vscode.CancellationTokenSource();
     const cancel = () => cancellation.cancel();
     signal?.addEventListener('abort', cancel, { once: true });
-    const check = () => { if (signal?.aborted) throw new Error('接続設定をキャンセルしました。'); };
+    const check = () => { if (signal?.aborted) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。'); };
     try {
       check();
       const config = vscode.workspace.getConfiguration('toritsuAI');
@@ -25,7 +28,7 @@ export class ConnectionSetup {
           { label: 'APIの接続先が分からない', id: 'unknown', description: 'ブラウザ版のURLとは別の接続情報が必要です' }
         ], { title: hasKey ? 'APIキーは登録済みです。次に接続先URLを設定してください' : '都立AIの初回接続設定', ignoreFocusOut: true }, cancellation.token);
         check();
-        if (!choice) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+        if (!choice) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。入力内容は残っています。');
         if (choice.id === 'unknown') throw new Error(hasKey
           ? 'APIキーは登録済みです。接続先URL（toritsuAI.baseUrl）が未設定のため、まだ接続できません。管理者・提供元にAPIのルートURLを確認し、「接続設定」で入力してください。キーの再入力は不要です。'
           : 'APIの接続先URLとキーが未設定です。管理者・提供元に確認し、「接続設定」で登録してください。');
@@ -50,7 +53,7 @@ export class ConnectionSetup {
             }
           }, cancellation.token);
           check();
-          if (!url?.trim()) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+          if (!url?.trim()) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。入力内容は残っています。');
           if (config.get<string>('chatEndpoint', '') === TORITSU_API_PATH) {
             await config.update('chatEndpoint', '/v1/chat/completions', vscode.ConfigurationTarget.Global);
           }
@@ -65,7 +68,7 @@ export class ConnectionSetup {
           validateInput: value => value.trim() ? undefined : 'APIキーを入力してください。'
         }, cancellation.token);
         check();
-        if (!key?.trim()) throw new Error('APIキーの登録をキャンセルしました。入力内容は残っています。');
+        if (!key?.trim()) throw new ConnectionSetupCancelled('APIキーの登録をキャンセルしました。入力内容は残っています。');
         await this.secrets.store(API_KEY_SECRET, key.trim());
       }
       check();

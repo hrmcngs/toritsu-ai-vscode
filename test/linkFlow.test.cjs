@@ -255,3 +255,11 @@ test('一時停止中のキー削除では途中回答と再開待ちを破棄',
   await provider.receive({type:'pause'});logout();finish();await pending;
   assert.equal(state().paused,false);assert.equal(state().partialAnswer,'');assert.deepEqual(state().messages,[]);
 });
+
+test('接続設定を閉じた場合は赤いエラーではなく再開案内を表示する', async t => {
+  const { ConnectionSetupCancelled } = require('../dist/services/connectionSetup');
+  const { provider, state } = setup(t, async () => { throw new ConnectionSetupCancelled('cancelled'); });
+  await provider.receive({ type:'send', text:'質問' });
+  assert.equal(state().error, ''); assert.match(state().notice, /接続設定/);
+  assert.equal(state().messages.length, 0); assert.equal(state().busy, false);
+});

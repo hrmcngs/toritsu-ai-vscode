@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { ConnectionSetup } from './services/connectionSetup';
+import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from './services/connectionSetup';
 import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
@@ -90,7 +90,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   for (const [id, action] of commands) {
     context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
       try { await action(); }
-      catch (error) { void vscode.window.showErrorMessage(`都立AI: ${errorMessage(error)}`); }
+      catch (error) {
+        if (error instanceof ConnectionSetupCancelled) {
+          const selected = await vscode.window.showInformationMessage(CONNECTION_SETUP_NOTICE, '接続設定を再開');
+          if (selected === '接続設定を再開') await vscode.commands.executeCommand('toritsuAI.setupConnection');
+        } else void vscode.window.showErrorMessage(`都立AI: ${errorMessage(error)}`);
+      }
     }));
   }
 }

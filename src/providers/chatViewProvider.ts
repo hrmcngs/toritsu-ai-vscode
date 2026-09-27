@@ -5,6 +5,7 @@ import { LlmClient } from '../services/llmClient';
 import { Message } from '../types/ai';
 import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
+import { ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from '../services/connectionSetup';
 import { collectContext } from '../services/contextCollector';
 import { createGeneratedFiles, ExistingFilesNeedEditing, normalizeDestinationPath, parseGeneratedFiles } from '../services/generatedFiles';
 import { chatPrompt } from '../services/promptBuilder';
@@ -398,7 +399,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
       } finally { this.generation = undefined; this.partialAnswer = ''; this.controller = undefined; }
     } catch (error) {
-      if (!this.queuedSend) this.error = errorMessage(error);
+      if (error instanceof ConnectionSetupCancelled) { this.error = ''; this.notice = CONNECTION_SETUP_NOTICE; }
+      else if (!this.queuedSend) this.error = errorMessage(error);
     } finally {
       const queued = ownsGeneration ? this.queuedSend : undefined;
       if (ownsGeneration) this.queuedSend = undefined;

@@ -64,3 +64,15 @@ test('新規ユーザーの授業用設定はモデル入力なしで本人の�
   assert.equal(config.apiKey, undefined);
   assert.equal(prompts, 1);
 });
+
+test('設定画面を閉じた場合は通常のエラーと区別し、登録済みキーを維持する', async () => {
+  const { ConnectionSetupCancelled } = require('../dist/services/connectionSetup');
+  config = {}; choice = undefined;
+  let key = 'saved-key';
+  const setup = new ConnectionSetup({ get: async () => key, store: async (_name, value) => { key = value; } });
+  await assert.rejects(setup.ensureConnection(), ConnectionSetupCancelled);
+  assert.equal(key, 'saved-key'); assert.deepEqual(config, {});
+  choice = { id: 'toritsu' };
+  await setup.ensureConnection();
+  assert.equal(key, 'saved-key'); assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+});

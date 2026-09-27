@@ -423,7 +423,7 @@ export async function setApiKey(secrets: vscode.SecretStorage, token?: vscode.Ca
 ````typescript
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { ConnectionSetup } from './services/connectionSetup';
+import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from './services/connectionSetup';
 import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
@@ -513,7 +513,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   for (const [id, action] of commands) {
     context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
       try { await action(); }
-      catch (error) { void vscode.window.showErrorMessage(`都立AI: ${errorMessage(error)}`); }
+      catch (error) {
+        if (error instanceof ConnectionSetupCancelled) {
+          const selected = await vscode.window.showInformationMessage(CONNECTION_SETUP_NOTICE, '接続設定を再開');
+          if (selected === '接続設定を再開') await vscode.commands.executeCommand('toritsuAI.setupConnection');
+        } else void vscode.window.showErrorMessage(`都立AI: ${errorMessage(error)}`);
+      }
     }));
   }
 }
@@ -613,6 +618,7 @@ import { LlmClient } from '../services/llmClient';
 import { Message } from '../types/ai';
 import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
+import { ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from '../services/connectionSetup';
 import { collectContext } from '../services/contextCollector';
 import { createGeneratedFiles, ExistingFilesNeedEditing, normalizeDestinationPath, parseGeneratedFiles } from '../services/generatedFiles';
 import { chatPrompt } from '../services/promptBuilder';
@@ -1006,7 +1012,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
       } finally { this.generation = undefined; this.partialAnswer = ''; this.controller = undefined; }
     } catch (error) {
-      if (!this.queuedSend) this.error = errorMessage(error);
+      if (error instanceof ConnectionSetupCancelled) { this.error = ''; this.notice = CONNECTION_SETUP_NOTICE; }
+      else if (!this.queuedSend) this.error = errorMessage(error);
     } finally {
       const queued = ownsGeneration ? this.queuedSend : undefined;
       if (ownsGeneration) this.queuedSend = undefined;
@@ -1527,6 +1534,9 @@ import * as vscode from 'vscode';
 import { API_KEY_SECRET } from './toritsuAiClient';
 import { TORITSU_API_BASE, TORITSU_API_PATH } from './toritsuPublicApi';
 
+export const CONNECTION_SETUP_NOTICE = '接続設定を閉じました。保存済みのAPIキー・設定は保持しています。接続先が未設定の場合は「接続設定」から再開してください。';
+export class ConnectionSetupCancelled extends Error {}
+
 export class ConnectionSetup {
   private active = false;
   constructor(private readonly secrets: vscode.SecretStorage) {}
@@ -1537,7 +1547,7 @@ export class ConnectionSetup {
     const cancellation = new vscode.CancellationTokenSource();
     const cancel = () => cancellation.cancel();
     signal?.addEventListener('abort', cancel, { once: true });
-    const check = () => { if (signal?.aborted) throw new Error('接続設定をキャンセルしました。'); };
+    const check = () => { if (signal?.aborted) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。'); };
     try {
       check();
       const config = vscode.workspace.getConfiguration('toritsuAI');
@@ -1550,7 +1560,7 @@ export class ConnectionSetup {
           { label: 'APIの接続先が分からない', id: 'unknown', description: 'ブラウザ版のURLとは別の接続情報が必要です' }
         ], { title: hasKey ? 'APIキーは登録済みです。次に接続先URLを設定してください' : '都立AIの初回接続設定', ignoreFocusOut: true }, cancellation.token);
         check();
-        if (!choice) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+        if (!choice) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。入力内容は残っています。');
         if (choice.id === 'unknown') throw new Error(hasKey
           ? 'APIキーは登録済みです。接続先URL（toritsuAI.baseUrl）が未設定のため、まだ接続できません。管理者・提供元にAPIのルートURLを確認し、「接続設定」で入力してください。キーの再入力は不要です。'
           : 'APIの接続先URLとキーが未設定です。管理者・提供元に確認し、「接続設定」で登録してください。');
@@ -1575,7 +1585,7 @@ export class ConnectionSetup {
             }
           }, cancellation.token);
           check();
-          if (!url?.trim()) throw new Error('接続設定をキャンセルしました。入力内容は残っています。');
+          if (!url?.trim()) throw new ConnectionSetupCancelled('接続設定をキャンセルしました。入力内容は残っています。');
           if (config.get<string>('chatEndpoint', '') === TORITSU_API_PATH) {
             await config.update('chatEndpoint', '/v1/chat/completions', vscode.ConfigurationTarget.Global);
           }
@@ -1590,7 +1600,7 @@ export class ConnectionSetup {
           validateInput: value => value.trim() ? undefined : 'APIキーを入力してください。'
         }, cancellation.token);
         check();
-        if (!key?.trim()) throw new Error('APIキーの登録をキャンセルしました。入力内容は残っています。');
+        if (!key?.trim()) throw new ConnectionSetupCancelled('APIキーの登録をキャンセルしました。入力内容は残っています。');
         await this.secrets.store(API_KEY_SECRET, key.trim());
       }
       check();
@@ -4129,6 +4139,18 @@ test('新規ユーザーの授業用設定はモデル入力なしで本人の�
   assert.equal(config.apiKey, undefined);
   assert.equal(prompts, 1);
 });
+
+test('設定画面を閉じた場合は通常のエラーと区別し、登録済みキーを維持する', async () => {
+  const { ConnectionSetupCancelled } = require('../dist/services/connectionSetup');
+  config = {}; choice = undefined;
+  let key = 'saved-key';
+  const setup = new ConnectionSetup({ get: async () => key, store: async (_name, value) => { key = value; } });
+  await assert.rejects(setup.ensureConnection(), ConnectionSetupCancelled);
+  assert.equal(key, 'saved-key'); assert.deepEqual(config, {});
+  choice = { id: 'toritsu' };
+  await setup.ensureConnection();
+  assert.equal(key, 'saved-key'); assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+});
 ````
 
 ### test/edit.test.cjs
@@ -4969,6 +4991,14 @@ test('一時停止中のキー削除では途中回答と再開待ちを破棄',
   while(!finish)await new Promise(r=>setImmediate(r));
   await provider.receive({type:'pause'});logout();finish();await pending;
   assert.equal(state().paused,false);assert.equal(state().partialAnswer,'');assert.deepEqual(state().messages,[]);
+});
+
+test('接続設定を閉じた場合は赤いエラーではなく再開案内を表示する', async t => {
+  const { ConnectionSetupCancelled } = require('../dist/services/connectionSetup');
+  const { provider, state } = setup(t, async () => { throw new ConnectionSetupCancelled('cancelled'); });
+  await provider.receive({ type:'send', text:'質問' });
+  assert.equal(state().error, ''); assert.match(state().notice, /接続設定/);
+  assert.equal(state().messages.length, 0); assert.equal(state().busy, false);
 });
 ````
 
@@ -8111,6 +8141,8 @@ SSEの改行とUTF-8の処理は [HTML Standard](https://html.spec.whatwg.org/mu
 6. チャットへ質問するか、コードを選択して `Explain Code` / `Edit Selection` を実行します。
 
 APIキー、ユーザー設定、チャット履歴はVSIXに含めません。配布者のキー・設定フォルダーを他の人に渡さないでください。受け取った側で利用権限と有効なAPIキーが必要です。授業用APIのキー発行画面は `https://ai.metro.tokyo.lg.jp/chat/public-api` です。
+
+接続設定を途中で閉じても、保存済みのAPIキーは削除されません。情報通知の「接続設定を再開」、または歯車の「接続設定を始める」から続けられます。「接続未確認」はキーが無効という意味ではなく、まだ有効なAPI応答を確認していない状態です。
 
 接続設定をやり直す場合は `Toritsu AI: Setup Connection`、キーを削除する場合は `Toritsu AI: Remove API Key` を使います。接続先を変更するときは、その接続先用のキーへ更新してください。
 

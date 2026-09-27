@@ -35,6 +35,8 @@ SSEの改行とUTF-8の処理は [HTML Standard](https://html.spec.whatwg.org/mu
 
 APIキー、ユーザー設定、チャット履歴はVSIXに含めません。配布者のキー・設定フォルダーを他の人に渡さないでください。受け取った側で利用権限と有効なAPIキーが必要です。授業用APIのキー発行画面は `https://ai.metro.tokyo.lg.jp/chat/public-api` です。
 
+接続設定を途中で閉じても、保存済みのAPIキーは削除されません。情報通知の「接続設定を再開」、または歯車の「接続設定を始める」から続けられます。「接続未確認」はキーが無効という意味ではなく、まだ有効なAPI応答を確認していない状態です。
+
 接続設定をやり直す場合は `Toritsu AI: Setup Connection`、キーを削除する場合は `Toritsu AI: Remove API Key` を使います。接続先を変更するときは、その接続先用のキーへ更新してください。
 
 問題がある場合:
