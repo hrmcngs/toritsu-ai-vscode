@@ -8,6 +8,8 @@
 toritsu-ai-vscode/
   package.json
   tsconfig.json
+  test/apiError.test.cjs
+  src/services/apiError.ts
   test/pause.test.cjs
   src/services/pauseGate.ts
   test/stream.test.cjs
@@ -2442,6 +2444,7 @@ import { LlmClient, OnDelta } from './llmClient';
 import { ApiProtocol, OpenAiCompatibleProtocol, ToritsuPublicProtocol } from './apiProtocol';
 import { isToritsuPublicApi } from './toritsuPublicApi';
 
+import { apiError } from './apiError';
 import { readChatStream } from './chatStream';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
@@ -2490,8 +2493,7 @@ export class ToritsuAiClient implements LlmClient {
         body: JSON.stringify(onDelta && config.streamResponses !== false && protocol.streamRequest ? protocol.streamRequest(config, messages) : protocol.request(config, messages))
       });
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
+        throw await apiError(response, publicApi);
       }
       if (onDelta && config.streamResponses !== false && protocol.streamRequest && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream') {
         return await readChatStream(response, onDelta, controller.signal);
@@ -2618,6 +2620,48 @@ export class PauseGate {
       signal.addEventListener('abort', abort, { once: true });
     });
   }
+}
+````
+
+### src/services/apiError.ts
+
+````typescript
+/** Read bounded JSON errors and expose only known categories, never server text or credentials. */
+export async function apiError(response: Response, classroom: boolean): Promise<Error> {
+  let hint = '';
+  if (response.headers.get('content-type')?.includes('json') && response.body) {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        if (size > 16384) break;
+        chunks.push(next.value);
+      }
+      if (size <= 16384) {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const fields = [body?.code, body?.error_code, body?.message, body?.error,
+          body?.error?.code, body?.error?.type, body?.error?.message];
+        const text = fields.filter(value => typeof value === 'string').join(' ').toLowerCase();
+        if (/expired|有効期限|期限切れ/.test(text)) hint = 'APIキーまたは利用期間の有効期限が切れている可能性があります。都立AIのキー発行画面で確認してください。';
+        else if (/quota|rate.?limit|利用回数|回数制限|利用上限|too many requests/.test(text)) hint = 'APIの利用回数・利用上限に達している可能性があります。キー発行画面の利用状況を確認してください。';
+        else if (/context_length|too (long|large)|maximum.*(length|token)|input.*limit|文字数|入力.*上限/.test(text)) hint = '入力の長さが上限を超えている可能性があります。新しいチャットで、添付を外して短い質問を試してください。';
+        else if (/invalid.*(key|token)|unauth|forbidden|api.?key.*invalid|認証|無効.*キー|キー.*無効/.test(text)) hint = 'APIキーまたは利用権限が拒否されています。授業用APIのキーを確認し、Set API Keyから登録し直してください。';
+        else if (/conversation.*(invalid|not found)|会話.*(無効|存在)/.test(text)) hint = '会話IDの扱いが接続先の仕様に合っていない可能性があります。API仕様の確認が必要です。';
+      }
+    } catch { /* Do not expose malformed JSON, HTML, or unrecognized server details. */ }
+    finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  } else await response.body?.cancel();
+  if (!hint) {
+    if (response.status === 401 || response.status === 403) hint = 'APIキーの有効期限・利用権限・接続先を確認してください。';
+    else if (response.status === 429) hint = 'APIの利用上限に達しています。時間を置くか、提供元の利用状況を確認してください。';
+    else if (classroom && response.status === 400) hint = '授業用APIが送信内容を受け付けませんでした。この番号だけでは原因を特定できません。「Toritsu AI: Check Connection」で短いテスト文が通るか確認してください。モデルIDの設定は不要です。';
+    else hint = '認証、モデル、接続先、利用制限を確認してください。';
+  }
+  return new Error(`APIエラー (HTTP ${response.status})。${hint}`);
 }
 ````
 
@@ -5648,6 +5692,35 @@ test('破棄すると一時停止の待機も解除する',async()=>{
 });
 ````
 
+### test/apiError.test.cjs
+
+````javascript
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {apiError}=require('../dist/services/apiError');
+const response=(body,status=400)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+
+test('授業用400の理由を分類し、キーや応答本文を表示しない',async()=>{
+  for(const [message,expected] of [['API key expired',/有効期限/],['quota exceeded',/利用回数/],['input too long',/入力の長さ/],['invalid api key',/利用権限/]]) {
+    const error=await apiError(response({message:message+' Bearer PRIVATE_SECRET'}),true);
+    assert.match(error.message,expected);assert.doesNotMatch(error.message,/PRIVATE_SECRET|Bearer/);
+  }
+});
+
+test('不明な400は原因を断定せず短文テストを案内する',async()=>{
+  const error=await apiError(response({message:'private internal details'}),true);
+  assert.match(error.message,/Check Connection/);assert.match(error.message,/モデルIDの設定は不要/);
+  assert.doesNotMatch(error.message,/private internal/);
+});
+
+test('不正JSONと大きすぎる応答は本文を出さずreaderを閉じる',async()=>{
+  for(const body of ['not json','x'.repeat(17000)]) {
+    const error=await apiError(new Response(body,{status:400,headers:{'content-type':'application/json'}}),true);
+    assert.match(error.message,/HTTP 400/);assert.doesNotMatch(error.message,/not json|xxxxx/);
+  }
+});
+````
+
 ### package-lock.json
 
 ````json
@@ -8227,6 +8300,7 @@ APIキー、ユーザー設定、チャット履歴はVSIXに含めません。�
 
 - ボタンが見つからない: コマンドパレットから `Toritsu AI: Open Chat` を実行してください。
 - 拡張が動かない: VS Codeのバージョン、ワークスペースの信頼状態、ウィンドウの再読み込みを確認してください。
+- HTTP 400: サーバーが送信内容を拒否しています。「Toritsu AI: Check Connection」で短いテスト文が通るか確認してください。短文も失敗する場合はキー・利用条件・API仕様、短文だけ成功する場合は入力や会話の長さを切り分けます。授業用APIではモデルIDの入力は不要です。JSON応答の既知のエラー理由だけを分類して表示し、サーバー本文やキーは表示しません。
 - HTTP 401/403: キーの有効期限・権限・接続先を確認してください。キーはサポート用メッセージに貼らないでください。
 - タイムアウト: 学校・組織のネットワーク制限や接続先の稼働状況を確認してください。
 - 授業用APIで画像を送れない: 現在の授業用文字生成API接続はテキストのみ対応しています。

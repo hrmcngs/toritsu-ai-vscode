@@ -3,6 +3,7 @@ import { LlmClient, OnDelta } from './llmClient';
 import { ApiProtocol, OpenAiCompatibleProtocol, ToritsuPublicProtocol } from './apiProtocol';
 import { isToritsuPublicApi } from './toritsuPublicApi';
 
+import { apiError } from './apiError';
 import { readChatStream } from './chatStream';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
@@ -51,8 +52,7 @@ export class ToritsuAiClient implements LlmClient {
         body: JSON.stringify(onDelta && config.streamResponses !== false && protocol.streamRequest ? protocol.streamRequest(config, messages) : protocol.request(config, messages))
       });
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
+        throw await apiError(response, publicApi);
       }
       if (onDelta && config.streamResponses !== false && protocol.streamRequest && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream') {
         return await readChatStream(response, onDelta, controller.signal);
