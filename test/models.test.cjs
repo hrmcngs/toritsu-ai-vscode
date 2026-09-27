@@ -78,7 +78,9 @@ test('授業用APIではモデル一覧を問い合わせずモデルIDを要求
   const models = new ModelSelection(async () => { throw new Error('must not list'); });
   await models.select('custom');
   await models.select('fast');
-  assert.equal(models.state.label, '都立AI（授業用）');
+  assert.equal(models.state.label, '都立AI · 自動');
+  assert.equal(models.state.serverManaged, true);
+  assert.match(models.state.description, /具体的なモデル名は取得できていません/);
   assert.deepEqual(models.state.options, []);
   assert.equal(config.model, undefined);
 });

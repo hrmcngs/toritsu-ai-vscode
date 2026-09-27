@@ -303,8 +303,8 @@
   document.addEventListener('click', event => { if (!event.target.closest('.model-control')) closeModelMenu(); });
   el('model-menu').addEventListener('keydown', event => {
     if (event.key === 'Escape') { closeModelMenu(); el('model').focus(); }
-    const buttons = [...el('model-menu').querySelectorAll('button')];
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const buttons = [...el('model-menu').querySelectorAll('button')].filter(button => !button.hidden && !button.disabled);
+    if (buttons.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault(); const step = event.key === 'ArrowDown' ? 1 : -1;
       buttons[(buttons.indexOf(document.activeElement) + step + buttons.length) % buttons.length].focus();
     }
@@ -466,7 +466,8 @@
     el('account').textContent = state.account;
     el('account').title = state.account;
     el('model').textContent = state.browserMode ? 'ブラウザで選択' : state.changingModel ? 'モデルを確認中…' : `${state.modelSelection.label} ⌄`;
-    el('model').title = state.model || 'モデルを選択';
+    el('model').title = state.modelSelection.description || state.model || 'モデルを選択';
+    el('model-description').textContent = state.modelSelection.description || '';
     el('model').disabled = state.browserMode || state.busy || state.changingModel;
     el('model-options').replaceChildren();
     for (const option of state.modelSelection.options) {
@@ -481,7 +482,10 @@
       button.append(label, detail); button.addEventListener('click', () => selectModel(option.id));
       el('model-options').append(button);
     }
-    for (const id of ['custom-model', 'configure-models']) el(id).disabled = state.busy || state.changingModel;
+    for (const id of ['custom-model', 'configure-models']) {
+      el(id).disabled = state.busy || state.changingModel;
+      el(id).hidden = !!state.modelSelection.serverManaged;
+    }
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
     el('login').textContent = state.signingIn ? 'APIキーを設定中…' : 'APIキーを登録';

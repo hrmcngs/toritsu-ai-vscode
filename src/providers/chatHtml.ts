@@ -69,6 +69,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <div class="send-tools"><div class="model-control">
 <button id="model" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" title="モデルを変更">モデルを選択 ⌄</button>
 <div id="model-menu" class="model-menu" role="menu" aria-label="モデル選択" hidden>
+<p id="model-description" class="approval-note"></p>
 <div id="model-options"></div>
 <button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>

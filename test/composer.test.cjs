@@ -217,3 +217,12 @@ test('既存ファイルの変更は削除・追加の差分として表示す�
   assert.match(text, /変更候補/); assert.match(text, /編集 · main.ts/);
   assert.match(text, /- old\n\+ new/); assert.doesNotMatch(text, /"original"/);
 });
+
+test('授業用APIはサーバー側モデルの説明を表示し無効な切替を隠す',()=>{
+ const {el,publish}=ui();
+ publish({modelSelection:{label:'都立AI · 自動',serverManaged:true,description:'モデルは都立AI側で選択',options:[]}});
+ assert.equal(el('model-description').textContent,'モデルは都立AI側で選択');
+ assert.equal(el('custom-model').hidden,true);assert.equal(el('configure-models').hidden,true);
+ publish({modelSelection:{label:'chosen',serverManaged:false,options:[]}});
+ assert.equal(el('custom-model').hidden,false);
+});

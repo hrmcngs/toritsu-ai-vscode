@@ -16,13 +16,18 @@ export class ModelSelection {
     private readonly prepare: (signal?: AbortSignal) => Promise<void> = async () => {}) {}
   get state() {
     const config = vscode.workspace.getConfiguration('toritsuAI');
-    if (usesToritsuPublicApi()) return { current: '', label: '都立AI（授業用）', options: [] };
+    if (usesToritsuPublicApi()) return {
+      current: '', label: '都立AI · 自動', serverManaged: true,
+      description: '授業用APIのモデルは都立AI側で選択されます。具体的なモデル名は取得できていません。ブラウザ版の高速・推論切替をAPIに指定する方法は未確認です。',
+      options: []
+    };
     const current = config.get<string>('model', '').trim();
     const options = presets.map(preset => {
       const model = config.get<string>(preset.setting, '').trim();
       return { id: preset.id, label: preset.label, model, selected: !!model && current === model };
     });
-    return { current, label: options.find(option => option.selected)?.label ?? (current || 'モデルを選択'), options };
+    return { current, label: options.find(option => option.selected)?.label ?? (current || 'モデルを選択'),
+      serverManaged: false, description: current ? `APIに指定するモデル: ${current}` : '接続先のモデル一覧から選択できます。', options };
   }
 
   async select(id: unknown, signal?: AbortSignal): Promise<void> {

@@ -601,6 +601,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <div class="send-tools"><div class="model-control">
 <button id="model" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" title="モデルを変更">モデルを選択 ⌄</button>
 <div id="model-menu" class="model-menu" role="menu" aria-label="モデル選択" hidden>
+<p id="model-description" class="approval-note"></p>
 <div id="model-options"></div>
 <button id="custom-model" type="button" role="menuitem">利用可能なモデルから選ぶ…</button>
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
@@ -2234,13 +2235,18 @@ export class ModelSelection {
     private readonly prepare: (signal?: AbortSignal) => Promise<void> = async () => {}) {}
   get state() {
     const config = vscode.workspace.getConfiguration('toritsuAI');
-    if (usesToritsuPublicApi()) return { current: '', label: '都立AI（授業用）', options: [] };
+    if (usesToritsuPublicApi()) return {
+      current: '', label: '都立AI · 自動', serverManaged: true,
+      description: '授業用APIのモデルは都立AI側で選択されます。具体的なモデル名は取得できていません。ブラウザ版の高速・推論切替をAPIに指定する方法は未確認です。',
+      options: []
+    };
     const current = config.get<string>('model', '').trim();
     const options = presets.map(preset => {
       const model = config.get<string>(preset.setting, '').trim();
       return { id: preset.id, label: preset.label, model, selected: !!model && current === model };
     });
-    return { current, label: options.find(option => option.selected)?.label ?? (current || 'モデルを選択'), options };
+    return { current, label: options.find(option => option.selected)?.label ?? (current || 'モデルを選択'),
+      serverManaged: false, description: current ? `APIに指定するモデル: ${current}` : '接続先のモデル一覧から選択できます。', options };
   }
 
   async select(id: unknown, signal?: AbortSignal): Promise<void> {
@@ -3329,8 +3335,8 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
   document.addEventListener('click', event => { if (!event.target.closest('.model-control')) closeModelMenu(); });
   el('model-menu').addEventListener('keydown', event => {
     if (event.key === 'Escape') { closeModelMenu(); el('model').focus(); }
-    const buttons = [...el('model-menu').querySelectorAll('button')];
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const buttons = [...el('model-menu').querySelectorAll('button')].filter(button => !button.hidden && !button.disabled);
+    if (buttons.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault(); const step = event.key === 'ArrowDown' ? 1 : -1;
       buttons[(buttons.indexOf(document.activeElement) + step + buttons.length) % buttons.length].focus();
     }
@@ -3492,7 +3498,8 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
     el('account').textContent = state.account;
     el('account').title = state.account;
     el('model').textContent = state.browserMode ? 'ブラウザで選択' : state.changingModel ? 'モデルを確認中…' : `${state.modelSelection.label} ⌄`;
-    el('model').title = state.model || 'モデルを選択';
+    el('model').title = state.modelSelection.description || state.model || 'モデルを選択';
+    el('model-description').textContent = state.modelSelection.description || '';
     el('model').disabled = state.browserMode || state.busy || state.changingModel;
     el('model-options').replaceChildren();
     for (const option of state.modelSelection.options) {
@@ -3507,7 +3514,10 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
       button.append(label, detail); button.addEventListener('click', () => selectModel(option.id));
       el('model-options').append(button);
     }
-    for (const id of ['custom-model', 'configure-models']) el(id).disabled = state.busy || state.changingModel;
+    for (const id of ['custom-model', 'configure-models']) {
+      el(id).disabled = state.busy || state.changingModel;
+      el(id).hidden = !!state.modelSelection.serverManaged;
+    }
     el('login').hidden = state.signedIn;
     el('login').disabled = state.signingIn;
     el('login').textContent = state.signingIn ? 'APIキーを設定中…' : 'APIキーを登録';
@@ -4272,6 +4282,15 @@ test('既存ファイルの変更は削除・追加の差分として表示す�
   const text = visibleText(el('messages'));
   assert.match(text, /変更候補/); assert.match(text, /編集 · main.ts/);
   assert.match(text, /- old\n\+ new/); assert.doesNotMatch(text, /"original"/);
+});
+
+test('授業用APIはサーバー側モデルの説明を表示し無効な切替を隠す',()=>{
+ const {el,publish}=ui();
+ publish({modelSelection:{label:'都立AI · 自動',serverManaged:true,description:'モデルは都立AI側で選択',options:[]}});
+ assert.equal(el('model-description').textContent,'モデルは都立AI側で選択');
+ assert.equal(el('custom-model').hidden,true);assert.equal(el('configure-models').hidden,true);
+ publish({modelSelection:{label:'chosen',serverManaged:false,options:[]}});
+ assert.equal(el('custom-model').hidden,false);
 });
 ````
 
@@ -5505,7 +5524,9 @@ test('授業用APIではモデル一覧を問い合わせずモデルIDを要求
   const models = new ModelSelection(async () => { throw new Error('must not list'); });
   await models.select('custom');
   await models.select('fast');
-  assert.equal(models.state.label, '都立AI（授業用）');
+  assert.equal(models.state.label, '都立AI · 自動');
+  assert.equal(models.state.serverManaged, true);
+  assert.match(models.state.description, /具体的なモデル名は取得できていません/);
   assert.deepEqual(models.state.options, []);
   assert.equal(config.model, undefined);
 });
@@ -8565,7 +8586,7 @@ AIのファイル生成用JSONを、そのまま表示せずファイル名・�
 
 提示された公式Pythonサンプルに基づき、Bearer認証で `{ input, conversation_id: "" }` を送り、応答の `message` を表示します。モデル指定・モデル一覧取得は行いません。会話はローカル履歴を文字列化して毎回送り、サーバーの会話IDは再利用しません。画像添付・画像生成はこの接続方式では未対応です。キーには有効期限と利用回数制限があります。
 
-実サービスへの接続は未検証です。以下のOpenAI互換形式の説明は、その他のAPI接続向けです。
+授業用APIの表示は「都立AI · 自動」です。モデルIDを固定せず都立AI側のモデルを利用します。具体的なモデル名の取得と、ブラウザ版の高速・推論切替をAPIに指定する方法は未確認のため、選択項目として表示しません。都立AI側でモデルが変わっても、同じAPI仕様が維持される限り拡張側でモデルIDを変更する必要はありません。以下のOpenAI互換形式の説明は、その他のAPI接続向けです。
 
 ## 通常のVS Codeにインストール
 
