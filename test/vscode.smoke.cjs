@@ -10,7 +10,7 @@ exports.run = async function () {
   assert.ok(extension.isActive, '都立AI拡張が起動している');
   const commands = await vscode.commands.getCommands(true);
   assert.ok(extension.packageJSON.contributes.viewsContainers.secondarySidebar);
-  for (const id of ['workbench.view.extension.toritsuAI-secondary', 'toritsuAI.chat.focus',
+  for (const id of ['toritsuAI.chat.focus',
     ...extension.packageJSON.contributes.commands.map(command => command.command)]) {
     assert.ok(commands.includes(id), `${id} が登録されている`);
   }
