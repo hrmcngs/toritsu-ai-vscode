@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { isToritsuPublicApi } from './toritsuPublicApi';
+import { A1Mode } from '../types/a1';
 
 export function usesToritsuPublicApi(): boolean {
   const config = vscode.workspace.getConfiguration('toritsuAI');
@@ -16,11 +17,17 @@ export class ModelSelection {
     private readonly prepare: (signal?: AbortSignal) => Promise<void> = async () => {}) {}
   get state() {
     const config = vscode.workspace.getConfiguration('toritsuAI');
-    if (usesToritsuPublicApi()) return {
-      current: '', label: '都立AI · 自動', serverManaged: true,
-      description: '授業用APIのモデルは都立AI側で選択されます。具体的なモデル名は取得できていません。ブラウザ版の高速・推論切替をAPIに指定する方法は未確認です。',
-      options: []
-    };
+    if (usesToritsuPublicApi()) {
+      const mode: A1Mode = config.get<string>('responseMode', 'fast') === 'reasoning' ? 'reasoning' : 'fast';
+      return {
+        current: '', mode, label: mode === 'fast' ? '高速モード' : '推論モード', serverManaged: true,
+        description: 'アプリ側の回答方針と履歴量を変更します。実モデルは都立AI側で選択され、ブラウザ版のモデル切替とは異なります。速度や推論能力の変更は保証しません。',
+        options: [
+          { id: 'fast', label: '高速モード', model: '', selected: mode === 'fast', description: '直近の短い履歴・簡潔な回答' },
+          { id: 'reasoning', label: '推論モード', model: '', selected: mode === 'reasoning', description: '長めの履歴・複雑な変更や検証を重視' }
+        ]
+      };
+    }
     const current = config.get<string>('model', '').trim();
     const options = presets.map(preset => {
       const model = config.get<string>(preset.setting, '').trim();
@@ -34,8 +41,12 @@ export class ModelSelection {
     const preset = presets.find(item => item.id === id);
     if (!preset && id !== 'custom') throw new Error('不正なモデル選択です。');
     await this.prepare(signal);
-    if (signal?.aborted || usesToritsuPublicApi()) return;
+    if (signal?.aborted) return;
     const config = vscode.workspace.getConfiguration('toritsuAI');
+    if (usesToritsuPublicApi()) {
+      if (preset) await config.update('responseMode', preset.id, vscode.ConfigurationTarget.Global);
+      return;
+    }
     const baseUrl = config.get<string>('baseUrl', '');
     let model = preset ? config.get<string>(preset.setting, '').trim() : '';
     if (!model) {

@@ -223,6 +223,16 @@
           "description": "A1 adapter configuration (OpenAI-compatible placeholder): timeoutMs",
           "minimum": 1,
           "maximum": 600000
+        },
+        "toritsuAI.responseMode": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "reasoning"
+          ],
+          "default": "fast",
+          "scope": "machine",
+          "description": "Classroom API application mode: controls history and response instructions, not the server model."
         }
       }
     }

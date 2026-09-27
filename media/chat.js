@@ -492,7 +492,7 @@
       const label = document.createElement('span'); label.className = 'model-title';
       label.textContent = option.label + (option.selected ? ' ✓' : '');
       const detail = document.createElement('small');
-      detail.textContent = option.model ? `設定済み · ${option.model}` : '一覧から選択して使用';
+      detail.textContent = option.description || (option.model ? `設定済み · ${option.model}` : '一覧から選択して使用');
       button.append(label, detail); button.addEventListener('click', () => selectModel(option.id));
       el('model-options').append(button);
     }

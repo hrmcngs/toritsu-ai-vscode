@@ -82,3 +82,15 @@ test('通常チャットの固定指示を簡潔に保ち、質問や添付本�
   assert.deepEqual(JSON.parse(withFile.at(-1).content).context, context);
   assert.doesNotMatch(chatPrompt([], '計画して', undefined, [], [], {planMode:true})[0].content, /toritsu-files/);
 });
+
+test('授業用の高速・推論は回答方針と履歴量を変更し最新のコードは維持',()=>{
+ const {chatPrompt}=require('../dist/services/promptBuilder');
+ const history=[{role:'user',content:'古い質問'},{role:'assistant',content:'x'.repeat(5000)},{role:'user',content:'直近'},{role:'assistant',content:'回答'}];
+ const context={filePath:'/index.html',language:'html',fullText:'<html>original</html>',selectedText:''};
+ const fast=chatPrompt(history,'変更して',context,[],[],{mode:'fast'});
+ const reasoning=chatPrompt(history,'変更して',context,[],[],{mode:'reasoning'});
+ assert.equal(fast.length,4);assert.equal(reasoning.length,6);
+ assert.match(fast[0].content,/要点を簡潔/);assert.match(reasoning[0].content,/整合性・例外・検証/);
+ assert.equal(fast.at(-1).content,reasoning.at(-1).content);
+ assert.equal(history.length,4);
+});

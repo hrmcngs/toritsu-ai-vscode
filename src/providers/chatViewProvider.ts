@@ -343,7 +343,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const editSources = this.files.map(file => ({ path: file.path, text: file.text }));
         if (context && editor?.document.uri.scheme === 'file') editSources.push({ path: editor.document.uri.fsPath, text: context.fullText });
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
-        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory });
+        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory, mode: this.models.state.mode });
         let lastPublish = 0;
         let received = '';
         const showDelta = (delta: string) => {
