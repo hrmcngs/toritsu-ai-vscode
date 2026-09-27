@@ -383,6 +383,7 @@ import { collectContext, requireEditor } from '../services/contextCollector';
 import { editPrompt } from '../services/promptBuilder';
 import { extractCode } from '../utils/extractCode';
 import { runRequest } from '../utils/runRequest';
+import { saveEditedDocument } from '../services/saveEditedDocument';
 
 export async function editSelection(
   client: LlmClient,
@@ -396,6 +397,8 @@ export async function editSelection(
   const version = document.version;
   const range = new vscode.Range(editor.selection.start, editor.selection.end);
   const context = collectContext(editor);
+  const start = document.offsetAt(range.start);
+  const end = document.offsetAt(range.end);
   const instruction = await vscode.window.showInputBox({
     title: 'Toritsu AI: Edit Selection',
     prompt: '変更内容を入力してください。選択範囲・ファイル全文・言語・パスをAPIに送信します。',
@@ -414,6 +417,7 @@ export async function editSelection(
     undoStopBefore: true, undoStopAfter: true
   });
   if (!applied) throw new Error('編集を適用できませんでした。ファイルの状態を確認して再実行してください。');
+  await saveEditedDocument(document, context.fullText.slice(0, start) + code + context.fullText.slice(end));
 }
 ````
 
@@ -1799,6 +1803,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { ApprovalService } from './approvalService';
 import { collectAttachments, TextAttachment } from './fileAttachments';
+import { saveEditedDocument } from './saveEditedDocument';
 
 export interface GeneratedFile { path: string; content: string; original?: string }
 const MAX_BYTES = 1024 * 1024;
@@ -1982,8 +1987,12 @@ export async function createGeneratedFiles(files: readonly GeneratedFile[], sign
   }
   if (!await vscode.workspace.applyEdit(edit)) throw new Error('ファイル作成に失敗しました。エクスプローラーで保存先を確認してください。');
   if (documents.size) {
+    for (const file of files) {
+      const existing = documents.get(file.path);
+      if (existing) await saveEditedDocument(existing.document, file.content);
+    }
     for (const { document } of documents.values()) await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
-    return `変更を適用しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）。編集した既存ファイルは未保存です。内容を確認して保存してください。`;
+    return `変更を適用・保存しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）`;
   }
   return `作成しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）`;
 }
@@ -4490,9 +4499,11 @@ function setup() {
     document: {
       version: 1, isClosed: false, languageId: 'typescript',
       uri: { scheme: 'file', fsPath: '/sample.ts' },
-      getText: range => range ? 'old' : 'old + context'
+      content: 'old + context', saved: false,
+      getText(range) { return range ? 'old' : this.content; }, offsetAt: position => position,
+      async save() { this.saved = true; return true; }
     },
-    edit: async callback => { callback({ replace: (range, code) => { applied = { range, code }; } }); return true; }
+    edit: async callback => { callback({ replace: (range, code) => { applied = { range, code }; editor.document.content = editor.document.content.slice(0,range.start)+code+editor.document.content.slice(range.end); } }); return true; }
   };
   return () => applied;
 }
@@ -4507,6 +4518,7 @@ test('送信した選択範囲にコードを適用（カーソル移動後も�
   assert.equal(applied().range.start, 0);
   assert.equal(applied().range.end, 3);
   assert.equal(applied().code, '  new');
+  assert.equal(editor.document.saved, true);
 });
 
 test('応答待ち中のファイル変更時は上書きしない', async () => {
@@ -4619,7 +4631,8 @@ Module._load = function(name, ...args) {
       registerTextDocumentContentProvider: (_scheme, provider) => { preview = provider.provideTextDocumentContent(); return { dispose() {} }; },
       openTextDocument: async uri => {
         if (!documents.has(uri.fsPath)) documents.set(uri.fsPath, { uri, content: await fs.readFile(uri.fsPath, 'utf8'), version: 1, isDirty: false, isClosed: false,
-          getText() { return this.content; }, positionAt(offset) { return offset; } });
+          getText() { return this.content; }, positionAt(offset) { return offset; },
+          async save() { await fs.writeFile(this.uri.fsPath, this.content); this.isDirty = false; return true; } });
         return documents.get(uri.fsPath);
       },
       applyEdit: async edit => {
@@ -4798,13 +4811,13 @@ async function editFixture(t) {
   return { ...fixture, root, file, changes, sources };
 }
 
-test('添付した既存ファイルを編集し、Undo可能な未保存ドキュメントとして保持する', async t => {
+test('既存ファイルをVS Codeで編集し、自動保存してディスクにも反映する', async t => {
   const { root, file, changes, sources, controller } = await editFixture(t); mode = 'auto';
   assert.deepEqual(parseGeneratedFiles(answer(changes)), changes);
   const result = await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, sources);
-  assert.match(result, /変更を適用/); assert.match(result, /未保存/);
-  assert.equal(documents.get(file).getText(), 'after\n'); assert.equal(documents.get(file).isDirty, true);
-  assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
+  assert.match(result, /変更を適用・保存/);
+  assert.equal(documents.get(file).getText(), 'after\n'); assert.equal(documents.get(file).isDirty, false);
+  assert.equal(await fs.readFile(file, 'utf8'), 'after\n');
 });
 
 test('未読のoriginalは実ファイルで再生成し、読込後に変更されたファイルは保護する', async t => {
@@ -4882,7 +4895,7 @@ test('未添付の既存編集は実ファイルを読み直し、各モード�
     await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, snapshot);
     assert.equal(documents.get(file).getText(), 'after\n');
     assert.equal(confirmations, approvalMode === 'ask' ? 2 : 0);
-    assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
+    assert.equal(await fs.readFile(file, 'utf8'), 'after\n');
   }
 });
 
@@ -8594,7 +8607,7 @@ AIが既存ファイルを新規作成として提案した場合も、編集と
 
 新規作成と既存編集を同時に依頼できます。既存編集は読み込んでAPIに送った元の全文が現在の内容と一致するファイルだけに適用します。未添付の場合は自動読込と編集案の再生成のためAPIを追加で1回使います。毎回確認では追加送信と適用を確認し、自動承認・フルアクセスでは指定先内の編集を自動適用します。未保存の編集があるファイルや、読込後・承認待ち中に変更されたファイルには適用しません。生成カードと毎回確認のカードでは `-` / `+` の差分を表示します。
 
-自動承認・フルアクセスでは対象の編集を自動適用し、毎回確認ではチャット内で許可・拒否を選びます。既存ファイルへの変更はVS Codeの編集として適用され、Undoできます。編集したファイルが開いたら内容を確認して保存してください（自動保存は行いません）。新規ファイルは指定先へ作成されます。
+自動承認・フルアクセスでは対象の編集を自動適用し、毎回確認ではチャット内で許可・拒否を選びます。既存ファイルへの変更はVS Codeの編集として適用して自動保存します。Undoも利用できます。保存に失敗した場合は編集内容を残してエラーを表示します。他の開いているファイルは保存しません。新規ファイルは指定先へ作成されます。
 
 ## 生成ファイルの見やすい表示
 
@@ -8774,7 +8787,7 @@ Microsoftログインは不要です。APIキーはVS CodeのSecretStorageに保
 履歴はアカウント・APIキー・接続先に紐付けず、このPCの都立AI拡張内で共有します。キーを削除しても保存済みの履歴は消えず、別のキーを登録しても引き継がれます。
 ブラウザの都立AIアカウントとは連携しません。拡張内の通信には、API提供元から発行されたキーと対応するAPIのURLが必要です。
 
-編集は自動保存せず、Undoで戻せます。リクエスト開始後に元ファイルが変更・クローズされた場合は適用しません。
+選択編集も適用後に対象ファイルを自動保存し、Undoで戻せます。対象ファイルに元からある未保存の内容も一緒に保存されます。リクエスト開始後に元ファイルが変更・クローズされた場合は適用しません。
 選択範囲を後から移動しても、取得時の範囲を編集します。複数選択と空選択は拒否します。
 通知からキャンセルできます。空の応答で選択範囲を削除することはできません。
 
@@ -9175,5 +9188,24 @@ export class OpenAiA1Adapter implements A1Adapter {
   response(body: unknown): string {
     return new OpenAiCompatibleProtocol().response(body);
   }
+}
+````
+
+
+### src/services/saveEditedDocument.ts
+
+````ts
+import type { TextDocument } from 'vscode';
+
+/** Save only the document just edited by AI, never all open editors. */
+export async function saveEditedDocument(document: TextDocument, expected: string): Promise<void> {
+  const normalizeEol = (text: string) => text.replace(/\r\n|\r/g, '\n');
+  if (document.isClosed || normalizeEol(document.getText()) !== normalizeEol(expected)) {
+    throw new Error(`編集後に内容が変わったため自動保存を中止しました: ${document.uri.fsPath}。エディターの内容を確認してください。`);
+  }
+  try {
+    if (await document.save()) return;
+  } catch { /* Keep the edited buffer available for manual recovery. */ }
+  throw new Error(`編集は適用しましたが保存できませんでした: ${document.uri.fsPath}。書き込み権限や保存先を確認してください。`);
 }
 ````

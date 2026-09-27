@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { ApprovalService } from './approvalService';
 import { collectAttachments, TextAttachment } from './fileAttachments';
+import { saveEditedDocument } from './saveEditedDocument';
 
 export interface GeneratedFile { path: string; content: string; original?: string }
 const MAX_BYTES = 1024 * 1024;
@@ -187,8 +188,12 @@ export async function createGeneratedFiles(files: readonly GeneratedFile[], sign
   }
   if (!await vscode.workspace.applyEdit(edit)) throw new Error('ファイル作成に失敗しました。エクスプローラーで保存先を確認してください。');
   if (documents.size) {
+    for (const file of files) {
+      const existing = documents.get(file.path);
+      if (existing) await saveEditedDocument(existing.document, file.content);
+    }
     for (const { document } of documents.values()) await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
-    return `変更を適用しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）。編集した既存ファイルは未保存です。内容を確認して保存してください。`;
+    return `変更を適用・保存しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）`;
   }
   return `作成しました: ${files.map(file => file.path).join('、')}（保存先: ${root}）`;
 }

@@ -4,6 +4,7 @@ import { collectContext, requireEditor } from '../services/contextCollector';
 import { editPrompt } from '../services/promptBuilder';
 import { extractCode } from '../utils/extractCode';
 import { runRequest } from '../utils/runRequest';
+import { saveEditedDocument } from '../services/saveEditedDocument';
 
 export async function editSelection(
   client: LlmClient,
@@ -17,6 +18,8 @@ export async function editSelection(
   const version = document.version;
   const range = new vscode.Range(editor.selection.start, editor.selection.end);
   const context = collectContext(editor);
+  const start = document.offsetAt(range.start);
+  const end = document.offsetAt(range.end);
   const instruction = await vscode.window.showInputBox({
     title: 'Toritsu AI: Edit Selection',
     prompt: '変更内容を入力してください。選択範囲・ファイル全文・言語・パスをAPIに送信します。',
@@ -35,4 +38,5 @@ export async function editSelection(
     undoStopBefore: true, undoStopAfter: true
   });
   if (!applied) throw new Error('編集を適用できませんでした。ファイルの状態を確認して再実行してください。');
+  await saveEditedDocument(document, context.fullText.slice(0, start) + code + context.fullText.slice(end));
 }

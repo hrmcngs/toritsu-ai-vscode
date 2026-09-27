@@ -20,7 +20,8 @@ Module._load = function(name, ...args) {
       registerTextDocumentContentProvider: (_scheme, provider) => { preview = provider.provideTextDocumentContent(); return { dispose() {} }; },
       openTextDocument: async uri => {
         if (!documents.has(uri.fsPath)) documents.set(uri.fsPath, { uri, content: await fs.readFile(uri.fsPath, 'utf8'), version: 1, isDirty: false, isClosed: false,
-          getText() { return this.content; }, positionAt(offset) { return offset; } });
+          getText() { return this.content; }, positionAt(offset) { return offset; },
+          async save() { await fs.writeFile(this.uri.fsPath, this.content); this.isDirty = false; return true; } });
         return documents.get(uri.fsPath);
       },
       applyEdit: async edit => {
@@ -199,13 +200,13 @@ async function editFixture(t) {
   return { ...fixture, root, file, changes, sources };
 }
 
-test('添付した既存ファイルを編集し、Undo可能な未保存ドキュメントとして保持する', async t => {
+test('既存ファイルをVS Codeで編集し、自動保存してディスクにも反映する', async t => {
   const { root, file, changes, sources, controller } = await editFixture(t); mode = 'auto';
   assert.deepEqual(parseGeneratedFiles(answer(changes)), changes);
   const result = await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, sources);
-  assert.match(result, /変更を適用/); assert.match(result, /未保存/);
-  assert.equal(documents.get(file).getText(), 'after\n'); assert.equal(documents.get(file).isDirty, true);
-  assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
+  assert.match(result, /変更を適用・保存/);
+  assert.equal(documents.get(file).getText(), 'after\n'); assert.equal(documents.get(file).isDirty, false);
+  assert.equal(await fs.readFile(file, 'utf8'), 'after\n');
 });
 
 test('未読のoriginalは実ファイルで再生成し、読込後に変更されたファイルは保護する', async t => {
@@ -283,7 +284,7 @@ test('未添付の既存編集は実ファイルを読み直し、各モード�
     await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, snapshot);
     assert.equal(documents.get(file).getText(), 'after\n');
     assert.equal(confirmations, approvalMode === 'ask' ? 2 : 0);
-    assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
+    assert.equal(await fs.readFile(file, 'utf8'), 'after\n');
   }
 });
 

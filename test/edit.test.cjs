@@ -29,9 +29,11 @@ function setup() {
     document: {
       version: 1, isClosed: false, languageId: 'typescript',
       uri: { scheme: 'file', fsPath: '/sample.ts' },
-      getText: range => range ? 'old' : 'old + context'
+      content: 'old + context', saved: false,
+      getText(range) { return range ? 'old' : this.content; }, offsetAt: position => position,
+      async save() { this.saved = true; return true; }
     },
-    edit: async callback => { callback({ replace: (range, code) => { applied = { range, code }; } }); return true; }
+    edit: async callback => { callback({ replace: (range, code) => { applied = { range, code }; editor.document.content = editor.document.content.slice(0,range.start)+code+editor.document.content.slice(range.end); } }); return true; }
   };
   return () => applied;
 }
@@ -46,6 +48,7 @@ test('送信した選択範囲にコードを適用（カーソル移動後も�
   assert.equal(applied().range.start, 0);
   assert.equal(applied().range.end, 3);
   assert.equal(applied().code, '  new');
+  assert.equal(editor.document.saved, true);
 });
 
 test('応答待ち中のファイル変更時は上書きしない', async () => {
