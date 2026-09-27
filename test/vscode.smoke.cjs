@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 exports.run = async function () {
-  const extension = vscode.extensions.getExtension('toritsu-ai-local.toritsu-ai');
+  const extension = vscode.extensions.getExtension('hrmcngs.toritsu-ai');
   assert.ok(extension, '都立AI拡張が読み込まれている');
   await extension.activate();
   assert.ok(extension.isActive, '都立AI拡張が起動している');

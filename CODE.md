@@ -89,9 +89,9 @@ toritsu-ai-vscode/
 {
   "name": "toritsu-ai",
   "displayName": "都立AI",
-  "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
+  "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
   "version": "0.12.0",
-  "publisher": "toritsu-ai-local",
+  "publisher": "hrmcngs",
   "private": true,
   "repository": {
     "type": "git",
@@ -5869,7 +5869,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 exports.run = async function () {
-  const extension = vscode.extensions.getExtension('toritsu-ai-local.toritsu-ai');
+  const extension = vscode.extensions.getExtension('hrmcngs.toritsu-ai');
   assert.ok(extension, '都立AI拡張が読み込まれている');
   await extension.activate();
   assert.ok(extension.isActive, '都立AI拡張が起動している');
@@ -8589,6 +8589,8 @@ test('授業用400には実際の送信量だけを追加する',async t=>{
 
 ````markdown
 # 都立AI VS Code Extension
+
+個人開発の非公式クライアントです。東京都・GovTech東京の公式拡張ではありません。Marketplaceの発行者は `hrmcngs` です。
 
 都立AIの授業用APIキーを登録するだけで使い始められます。接続先が未設定の場合は起動時に授業用APIを自動設定し、URL・モデルIDの入力や接続先の選択は求めません。すでに別のAPIを設定している場合は、その設定を維持します。
 
