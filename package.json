@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "publisher": "hrmcngs",
   "private": true,
   "repository": {
