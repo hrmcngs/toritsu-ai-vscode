@@ -13,6 +13,31 @@
   let submission;
   const filePreviewOpen = new Map();
   const defaultPlaceholder = prompt.placeholder;
+  function resizePrompt() {
+    prompt.style.height = 'auto';
+    prompt.style.height = `${Math.min(220, Math.max(60, prompt.scrollHeight))}px`;
+  }
+  function updateScrollButton() {
+    const content = el('content');
+    el('latest').hidden = content.scrollHeight - content.scrollTop - content.clientHeight < 100;
+  }
+  el('content').addEventListener('scroll', updateScrollButton);
+  el('latest').addEventListener('click', () => {
+    el('content').scrollTop = el('content').scrollHeight;
+    updateScrollButton();
+  });
+  el('context-option').addEventListener('click', () => {
+    if (context.disabled) return;
+    context.checked = !context.checked;
+    el('context-option').setAttribute('aria-checked', String(context.checked));
+    el('context-chip').hidden = !context.checked;
+    closeAddMenu(); prompt.focus();
+  });
+  el('context-chip').addEventListener('click', () => {
+    if (context.disabled) return;
+    context.checked = false; el('context-chip').hidden = true;
+    el('context-option').setAttribute('aria-checked', 'false');
+  });
   function filePreview(file) {
     if (typeof file.original !== 'string') return file.content;
     if (file.original === file.content) return '変更なし';
@@ -69,6 +94,7 @@
     if (submission && !prompt.value) {
       prompt.value = submission.input;
       prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+      resizePrompt();
     }
   }
   function renderMessages() {
@@ -82,6 +108,12 @@
       const heading = document.createElement('div'); heading.className = 'message-heading';
       const label = document.createElement('strong'); label.textContent = message.role === 'user' ? 'あなた' : '都立AI';
       heading.append(label);
+      if (message.role === 'assistant') {
+        const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'text-button copy-answer';
+        copy.textContent = 'コピー'; copy.setAttribute('aria-label', '回答をコピー');
+        copy.addEventListener('click', () => vscode.postMessage({ type: 'copyAnswer', index: messageIndex }));
+        heading.append(copy);
+      }
       if (message.role === 'user') {
         const badge = document.createElement('span'); badge.className = `message-status ${message.status || 'complete'}`;
         badge.textContent = message.status === 'sending' && state.approvalRequest ? '確認待ち' : ({ sending: '送信中・回答待ち', stopping: '一時停止中', paused: '一時停止', stopped: '停止しました', failed: '完了できませんでした' })[message.status] || '✓ 送信済み';
@@ -114,6 +146,7 @@
     }
     prompt.placeholder = submission?.status === 'sending' ? '送信中…停止ボタンで入力を編集できます' : defaultPlaceholder;
     if (messages.length && follow) el('content').scrollTop = el('content').scrollHeight;
+    updateScrollButton();
   }
   const modes = { ask: '毎回確認', auto: '自動承認', full: 'フルアクセス' };
   const imageLimit = 5 * 1024 * 1024;
@@ -324,6 +357,7 @@
       const attachments = [...images.map(image => image.name), ...(state.files ?? []).map(file => file.name)];
       submission = { input: prompt.value, text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
       prompt.value = '';
+      resizePrompt();
       renderMessages();
       el('cancel').hidden = false; el('send').hidden = true;
       el('status').textContent = '質問を送信しています…';
@@ -338,13 +372,21 @@
         event.preventDefault();
         prompt.value = value;
         prompt.setSelectionRange(value.length, value.length);
+        resizePrompt();
       }
     }
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat) {
       event.preventDefault(); el('form').requestSubmit();
     }
   });
-  prompt.addEventListener('input', () => inputHistory.reset());
+  prompt.addEventListener('input', () => { inputHistory.reset(); resizePrompt(); });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+    const menuOpen = ['add-menu', 'model-menu', 'approval-menu'].some(id => !el(id).hidden);
+    if (menuOpen) { closeAddMenu(); closeModelMenu(); closeApprovalMenu(); prompt.focus(); return; }
+    if (el('sketch-dialog').open || state.approvalRequest) return;
+    if (state.busy && !state.paused) { event.preventDefault(); el('cancel').click(); }
+  });
   function age(timestamp) {
     const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
     return minutes < 1 ? '今' : minutes < 60 ? `${minutes}分前` : minutes < 1440 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
@@ -368,7 +410,7 @@
     inputHistory.set(state.signedIn ? (state.inputHistory ?? state.messages.filter(message => message.role === 'user').map(message => message.content)) : []);
     if (!state.signedIn || !state.busy) { stopping = false; pendingSubmission = false; }
     el('browser-help').hidden = !state.browserMode;
-    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
+    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（Enter）・改行（Shift + Enter）';
     el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
@@ -511,7 +553,11 @@
     if (!state.signedIn || (state.clearInput && !wasStopping)) { prompt.value = ''; context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false; }
     if ((state.clearInput || wasStopping) && state.signedIn && !state.busy) prompt.focus();
     renderMessages();
-    if (state.messages.length) el('content').scrollTop = el('content').scrollHeight;
+    if (previousChatId !== state.activeChatId) el('content').scrollTop = el('content').scrollHeight;
+    el('context-chip').hidden = !context.checked;
+    el('context-chip').disabled = context.disabled;
+    el('context-option').setAttribute('aria-checked', String(context.checked));
+    resizePrompt(); updateScrollButton();
   });
   vscode.postMessage({ type: 'ready' });
 })();

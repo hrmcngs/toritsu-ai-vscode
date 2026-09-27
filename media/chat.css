@@ -149,3 +149,20 @@ article.user { border: 1px solid var(--vscode-panel-border, #ffffff20); }
 .generated-file[open] summary { border-bottom: 1px solid var(--vscode-panel-border, #ffffff25); }
 article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; overflow: auto; white-space: pre; overflow-wrap: normal; font-family: var(--vscode-editor-font-family); font-size: 12px; line-height: 1.6; tab-size: 2; }
 .generated-file code { font: inherit; }
+
+/* Compact composer controls with a stable send/stop position. */
+.app { position: relative; }
+textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; }
+.composer-bottom { flex-wrap: nowrap; gap: 4px; }
+.composer-actions { flex-wrap: nowrap; min-width: 0; }
+.send-tools { gap: 4px; min-width: 0; }
+#model { max-width: clamp(75px, 28vw, 180px); }
+#approval-toggle { white-space: nowrap; }
+#send, #cancel { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; }
+#cancel { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+#cancel svg { fill: currentColor; width: 15px; height: 15px; }
+.latest-button { align-self: center; background: var(--vscode-button-secondaryBackground, var(--vscode-editor-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); border: 1px solid var(--vscode-panel-border); border-radius: 20px; padding: 6px 12px; margin-top: -34px; z-index: 2; }
+.copy-answer { font-size: 11px; }
+#context-chip { margin-bottom: 8px; }
+#context-option[aria-checked=true] { background: var(--vscode-list-inactiveSelectionBackground); }
+@media (max-width: 280px) { #model { max-width: 72px; } #approval-toggle { font-size: 10px; padding: 4px; } .composer { padding: 8px; } }

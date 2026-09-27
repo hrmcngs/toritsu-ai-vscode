@@ -118,7 +118,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async receive(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown };
+    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown };
     if (message.type === 'ready') { this.publish(); return; }
     if (message.type === 'pause' && this.generation && !this.approvalPrompt.current) {
       this.generation.gate.pause(); this.error = ''; this.publish(); return;
@@ -137,6 +137,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (this.approvalPrompt.current && message.type !== 'logout') return;
     let ownsGeneration = false;
     try {
+      if (message.type === 'copyAnswer') {
+        if (!this.auth.session || typeof message.index !== 'number' || !Number.isInteger(message.index)) return;
+        const answer = this.history.messages[message.index];
+        if (answer?.role === 'assistant' && typeof answer.content === 'string') {
+          await vscode.env.clipboard.writeText(answer.content);
+          this.notice = '回答をコピーしました。';
+        }
+        return;
+      }
       if (message.type === 'selectModel') {
         if (this.controller || this.changingModel) return;
         await this.auth.requireSession();

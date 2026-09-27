@@ -8,6 +8,7 @@ const { PromptHistory } = require('../media/promptHistory');
 function ui() {
   class Element {
     value = ''; checked = false; disabled = false; hidden = true;
+    style = {}; scrollHeight = 60; scrollTop = 0; clientHeight = 60;
     selectionStart = 0; selectionEnd = 0; dataset = {}; children = []; listeners = {};
     classList = { add() {}, remove() {} };
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -25,6 +26,7 @@ function ui() {
     focus() { this.focused = true; }
     setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
     requestSubmit() { this.emit('submit'); }
+    click() { this.emit('click'); }
   }
   const nodes = new Map(); const events = {}; const sent = [];
   const el = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
@@ -51,6 +53,32 @@ test('上で質問を遡り、下で元の下書きへ戻る。複数行の通�
   assert.equal(history.navigate('up', 'abc', 0, 3), undefined);
   history.set(['new chat']);
   assert.equal(history.navigate('up', '', 0, 0), 'new chat');
+});
+
+test('Enterで送信、Shift EnterとIME確定では送信しない', () => {
+  const { el, sent } = ui(); const input=el('prompt');input.value='コードを書いて';
+  const count=sent.length;
+  for(const extra of [{shiftKey:true},{isComposing:true},{keyCode:229}]) {
+    input.emit('keydown',{key:'Enter',...extra});assert.equal(sent.length,count);
+  }
+  input.emit('keydown',{key:'Enter'});assert.equal(sent.at(-1).type,'send');
+  assert.equal(sent.at(-1).text,'コードを書いて');
+});
+
+test('読み返し中はスクロール位置を維持し最新へボタンで戻れる', () => {
+  const {el,publish}=ui();const content=el('content');
+  content.scrollHeight=2000;content.clientHeight=400;content.scrollTop=100;
+  publish({messages:[{role:'assistant',content:'回答'}]});
+  assert.equal(content.scrollTop,100);assert.equal(el('latest').hidden,false);
+  el('latest').emit('click');assert.equal(content.scrollTop,2000);assert.equal(el('latest').hidden,true);
+});
+
+test('入力欄は高さを調整し、回答コピーは本文ではなく履歴の位置を送る', () => {
+  const {el,sent,publish}=ui();el('prompt').scrollHeight=300;el('prompt').emit('input');
+  assert.equal(el('prompt').style.height,'220px');
+  publish({messages:[{role:'assistant',content:'回答'}]});
+  el('messages').children[0].children[0].children[1].emit('click');
+  assert.equal(sent.at(-1).type,'copyAnswer');assert.equal(sent.at(-1).index,0);
 });
 
 test('Webviewの上キーで入力を呼び出す。IME・修飾キーは履歴操作にしない', () => {

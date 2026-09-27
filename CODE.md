@@ -561,14 +561,16 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <div id="messages" role="log" aria-live="polite"></div>
 <section id="operation-approval" class="operation-approval" aria-label="操作の確認" aria-live="polite" hidden></section>
 </main>
+<button id="latest" type="button" class="latest-button" aria-label="最新の回答へ移動" hidden>↓ 最新へ</button>
 <footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
+<button id="context-chip" type="button" class="option-chip" title="現在のファイルの添付を外す" hidden>現在のファイル ×</button>
 <div id="options-summary" class="options-summary" hidden></div>
 <div id="file-attachments" aria-label="添付ファイル"></div>
 <div id="sources" aria-label="参考リンク"></div>
 <div id="attachments" aria-label="添付画像"></div>
 <p id="image-help" class="attachment-hint" hidden>画像対応モデルが必要です。画像本体は今回の送信だけに含まれます。</p>
-<textarea id="prompt" rows="3" placeholder="都立AIに相談する…（↑で前の質問を呼び出し）" disabled></textarea>
+<textarea id="prompt" rows="3" placeholder="作りたいものや変更したいことを入力…" disabled></textarea>
 <input id="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
 <div class="composer-bottom"><div class="composer-actions">
 <button id="attach" type="button" class="icon-button" title="追加メニュー" aria-label="追加メニュー" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu" disabled>${icon('M12 5v14M5 12h14')}</button>
@@ -582,10 +584,11 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button type="button" role="menuitem" data-add="goal">${icon('M21 12a9 9 0 1 1-9-9M17 12a5 5 0 1 1-5-5m0 5 9-9m-5 0h5v5')}<span>目標<small>この会話で達成したいこと</small></span></button>
 <button id="plan-option" type="button" role="menuitemcheckbox" aria-checked="false" data-add="planMode">${icon('M9 18h6m-5 3h4M8 15a7 7 0 1 1 8 0l-1 3H9Z')}<span>プランモード<small id="plan-description">作る前に手順を相談</small></span><span id="plan-check" hidden>✓</span></button>
 <button type="button" role="menuitem" data-add="sketch">${icon('M4 17 16 5l3 3L7 20H4Zm10-10 3 3M11 20h9')}<span>スケッチ<small>描いたイメージを添付</small></span></button>
+<button id="context-option" type="button" role="menuitemcheckbox" aria-checked="false"><span>現在のファイルを添付<small>開いているファイル全文を送信</small></span></button>
 <p class="add-heading">接続</p>
 <button type="button" role="menuitem" data-add="settings">${icon('M4 7h16M4 17h16M8 4v6m8 4v6')}<span>都立AIの接続設定<small>API・モデル・キーを設定</small></span></button>
 </div>
-<button id="load-links" type="button" class="text-button" title="入力したURL、または指定したURLのWebページ・PDFを読み込む" disabled>リンクを読み込む</button>
+<button id="load-links" type="button" hidden class="text-button" title="入力したURL、または指定したURLのWebページ・PDFを読み込む" disabled>リンクを読み込む</button>
 <div class="approval-control"><button id="approval-toggle" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="approval-menu"><span id="approval-label">自動承認</span> ⌄</button>
 <div id="approval-menu" class="approval-menu" role="menu" aria-label="操作の承認設定" hidden>
 <p class="approval-heading">都立AIの操作をどのように承認しますか？</p>
@@ -593,7 +596,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button type="button" role="menuitemradio" aria-checked="true" data-mode="auto"><span class="mode-title">自動承認<span class="mode-check">✓</span></span><small>API送信・指定先へのファイル作成・編集は自動。ワークスペース外の選択編集を確認します</small></button>
 <button type="button" role="menuitemradio" aria-checked="false" data-mode="full" class="full-access"><span class="mode-title">フルアクセス<span class="mode-check">✓</span></span><small>API送信・ファイル作成・編集の確認を省略します</small></button>
 <p class="approval-note">指定した保存先へフォルダー・ファイルを作成できます。保存先内の既存ファイルも、手動添付なしで読み込んで編集できます。シェル実行は未対応です。</p></div></div></div>
-<label class="context-label" title="現在のファイル全文・言語・パス・選択範囲を送信">
+<label hidden class="context-label" title="現在のファイル全文・言語・パス・選択範囲を送信">
 <input id="context" type="checkbox" disabled>ファイルを添付</label>
 <div class="send-tools"><div class="model-control">
 <button id="model" type="button" class="text-button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" title="モデルを変更">モデルを選択 ⌄</button>
@@ -603,8 +606,8 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
 <button id="cancel" type="button" class="icon-button" title="一時停止して入力を編集" aria-label="一時停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
-<button id="send" type="submit" class="send-button" title="送信（⌘ / Ctrl + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
-<p class="footnote">都立AI · 生成された内容は確認してから使用してください</p></footer>
+<button id="send" type="submit" class="send-button" title="送信（Enter）・改行（Shift + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
+<p class="footnote">Enter 送信 · Shift＋Enter 改行 · Esc 一時停止</p></footer>
 </div>
 <dialog id="sketch-dialog" aria-labelledby="sketch-title"><h2 id="sketch-title">スケッチ</h2><p class="muted">図や画面のイメージを描いてください。</p><canvas id="sketch-canvas" width="1000" height="620" aria-label="スケッチの描画領域"></canvas><div class="sketch-actions"><button id="sketch-clear" class="text-button" type="button">描き直す</button><button id="sketch-close" class="text-button" type="button">キャンセル</button><button id="sketch-add" class="primary" type="button" disabled>画像として添付</button></div></dialog>
 <script nonce="${nonce}" src="${promptHistory}"></script><script nonce="${nonce}" src="${script}"></script></body></html>`;
@@ -734,7 +737,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async receive(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown };
+    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown };
     if (message.type === 'ready') { this.publish(); return; }
     if (message.type === 'pause' && this.generation && !this.approvalPrompt.current) {
       this.generation.gate.pause(); this.error = ''; this.publish(); return;
@@ -753,6 +756,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (this.approvalPrompt.current && message.type !== 'logout') return;
     let ownsGeneration = false;
     try {
+      if (message.type === 'copyAnswer') {
+        if (!this.auth.session || typeof message.index !== 'number' || !Number.isInteger(message.index)) return;
+        const answer = this.history.messages[message.index];
+        if (answer?.role === 'assistant' && typeof answer.content === 'string') {
+          await vscode.env.clipboard.writeText(answer.content);
+          this.notice = '回答をコピーしました。';
+        }
+        return;
+      }
       if (message.type === 'selectModel') {
         if (this.controller || this.changingModel) return;
         await this.auth.requireSession();
@@ -2990,6 +3002,23 @@ article.user { border: 1px solid var(--vscode-panel-border, #ffffff20); }
 .generated-file[open] summary { border-bottom: 1px solid var(--vscode-panel-border, #ffffff25); }
 article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; overflow: auto; white-space: pre; overflow-wrap: normal; font-family: var(--vscode-editor-font-family); font-size: 12px; line-height: 1.6; tab-size: 2; }
 .generated-file code { font: inherit; }
+
+/* Compact composer controls with a stable send/stop position. */
+.app { position: relative; }
+textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; }
+.composer-bottom { flex-wrap: nowrap; gap: 4px; }
+.composer-actions { flex-wrap: nowrap; min-width: 0; }
+.send-tools { gap: 4px; min-width: 0; }
+#model { max-width: clamp(75px, 28vw, 180px); }
+#approval-toggle { white-space: nowrap; }
+#send, #cancel { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; }
+#cancel { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+#cancel svg { fill: currentColor; width: 15px; height: 15px; }
+.latest-button { align-self: center; background: var(--vscode-button-secondaryBackground, var(--vscode-editor-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); border: 1px solid var(--vscode-panel-border); border-radius: 20px; padding: 6px 12px; margin-top: -34px; z-index: 2; }
+.copy-answer { font-size: 11px; }
+#context-chip { margin-bottom: 8px; }
+#context-option[aria-checked=true] { background: var(--vscode-list-inactiveSelectionBackground); }
+@media (max-width: 280px) { #model { max-width: 72px; } #approval-toggle { font-size: 10px; padding: 4px; } .composer { padding: 8px; } }
 ````
 
 ### media/chat.js
@@ -3010,6 +3039,31 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
   let submission;
   const filePreviewOpen = new Map();
   const defaultPlaceholder = prompt.placeholder;
+  function resizePrompt() {
+    prompt.style.height = 'auto';
+    prompt.style.height = `${Math.min(220, Math.max(60, prompt.scrollHeight))}px`;
+  }
+  function updateScrollButton() {
+    const content = el('content');
+    el('latest').hidden = content.scrollHeight - content.scrollTop - content.clientHeight < 100;
+  }
+  el('content').addEventListener('scroll', updateScrollButton);
+  el('latest').addEventListener('click', () => {
+    el('content').scrollTop = el('content').scrollHeight;
+    updateScrollButton();
+  });
+  el('context-option').addEventListener('click', () => {
+    if (context.disabled) return;
+    context.checked = !context.checked;
+    el('context-option').setAttribute('aria-checked', String(context.checked));
+    el('context-chip').hidden = !context.checked;
+    closeAddMenu(); prompt.focus();
+  });
+  el('context-chip').addEventListener('click', () => {
+    if (context.disabled) return;
+    context.checked = false; el('context-chip').hidden = true;
+    el('context-option').setAttribute('aria-checked', 'false');
+  });
   function filePreview(file) {
     if (typeof file.original !== 'string') return file.content;
     if (file.original === file.content) return '変更なし';
@@ -3066,6 +3120,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     if (submission && !prompt.value) {
       prompt.value = submission.input;
       prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+      resizePrompt();
     }
   }
   function renderMessages() {
@@ -3079,6 +3134,12 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
       const heading = document.createElement('div'); heading.className = 'message-heading';
       const label = document.createElement('strong'); label.textContent = message.role === 'user' ? 'あなた' : '都立AI';
       heading.append(label);
+      if (message.role === 'assistant') {
+        const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'text-button copy-answer';
+        copy.textContent = 'コピー'; copy.setAttribute('aria-label', '回答をコピー');
+        copy.addEventListener('click', () => vscode.postMessage({ type: 'copyAnswer', index: messageIndex }));
+        heading.append(copy);
+      }
       if (message.role === 'user') {
         const badge = document.createElement('span'); badge.className = `message-status ${message.status || 'complete'}`;
         badge.textContent = message.status === 'sending' && state.approvalRequest ? '確認待ち' : ({ sending: '送信中・回答待ち', stopping: '一時停止中', paused: '一時停止', stopped: '停止しました', failed: '完了できませんでした' })[message.status] || '✓ 送信済み';
@@ -3111,6 +3172,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     }
     prompt.placeholder = submission?.status === 'sending' ? '送信中…停止ボタンで入力を編集できます' : defaultPlaceholder;
     if (messages.length && follow) el('content').scrollTop = el('content').scrollHeight;
+    updateScrollButton();
   }
   const modes = { ask: '毎回確認', auto: '自動承認', full: 'フルアクセス' };
   const imageLimit = 5 * 1024 * 1024;
@@ -3321,6 +3383,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
       const attachments = [...images.map(image => image.name), ...(state.files ?? []).map(file => file.name)];
       submission = { input: prompt.value, text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
       prompt.value = '';
+      resizePrompt();
       renderMessages();
       el('cancel').hidden = false; el('send').hidden = true;
       el('status').textContent = '質問を送信しています…';
@@ -3335,13 +3398,21 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
         event.preventDefault();
         prompt.value = value;
         prompt.setSelectionRange(value.length, value.length);
+        resizePrompt();
       }
     }
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat) {
       event.preventDefault(); el('form').requestSubmit();
     }
   });
-  prompt.addEventListener('input', () => inputHistory.reset());
+  prompt.addEventListener('input', () => { inputHistory.reset(); resizePrompt(); });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+    const menuOpen = ['add-menu', 'model-menu', 'approval-menu'].some(id => !el(id).hidden);
+    if (menuOpen) { closeAddMenu(); closeModelMenu(); closeApprovalMenu(); prompt.focus(); return; }
+    if (el('sketch-dialog').open || state.approvalRequest) return;
+    if (state.busy && !state.paused) { event.preventDefault(); el('cancel').click(); }
+  });
   function age(timestamp) {
     const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
     return minutes < 1 ? '今' : minutes < 60 ? `${minutes}分前` : minutes < 1440 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
@@ -3365,7 +3436,7 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     inputHistory.set(state.signedIn ? (state.inputHistory ?? state.messages.filter(message => message.role === 'user').map(message => message.content)) : []);
     if (!state.signedIn || !state.busy) { stopping = false; pendingSubmission = false; }
     el('browser-help').hidden = !state.browserMode;
-    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（⌘ / Ctrl + Enter）';
+    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（Enter）・改行（Shift + Enter）';
     el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
@@ -3508,7 +3579,11 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
     if (!state.signedIn || (state.clearInput && !wasStopping)) { prompt.value = ''; context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false; }
     if ((state.clearInput || wasStopping) && state.signedIn && !state.busy) prompt.focus();
     renderMessages();
-    if (state.messages.length) el('content').scrollTop = el('content').scrollHeight;
+    if (previousChatId !== state.activeChatId) el('content').scrollTop = el('content').scrollHeight;
+    el('context-chip').hidden = !context.checked;
+    el('context-chip').disabled = context.disabled;
+    el('context-option').setAttribute('aria-checked', String(context.checked));
+    resizePrompt(); updateScrollButton();
   });
   vscode.postMessage({ type: 'ready' });
 })();
@@ -3989,6 +4064,7 @@ const { PromptHistory } = require('../media/promptHistory');
 function ui() {
   class Element {
     value = ''; checked = false; disabled = false; hidden = true;
+    style = {}; scrollHeight = 60; scrollTop = 0; clientHeight = 60;
     selectionStart = 0; selectionEnd = 0; dataset = {}; children = []; listeners = {};
     classList = { add() {}, remove() {} };
     addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -4006,6 +4082,7 @@ function ui() {
     focus() { this.focused = true; }
     setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
     requestSubmit() { this.emit('submit'); }
+    click() { this.emit('click'); }
   }
   const nodes = new Map(); const events = {}; const sent = [];
   const el = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
@@ -4032,6 +4109,32 @@ test('上で質問を遡り、下で元の下書きへ戻る。複数行の通�
   assert.equal(history.navigate('up', 'abc', 0, 3), undefined);
   history.set(['new chat']);
   assert.equal(history.navigate('up', '', 0, 0), 'new chat');
+});
+
+test('Enterで送信、Shift EnterとIME確定では送信しない', () => {
+  const { el, sent } = ui(); const input=el('prompt');input.value='コードを書いて';
+  const count=sent.length;
+  for(const extra of [{shiftKey:true},{isComposing:true},{keyCode:229}]) {
+    input.emit('keydown',{key:'Enter',...extra});assert.equal(sent.length,count);
+  }
+  input.emit('keydown',{key:'Enter'});assert.equal(sent.at(-1).type,'send');
+  assert.equal(sent.at(-1).text,'コードを書いて');
+});
+
+test('読み返し中はスクロール位置を維持し最新へボタンで戻れる', () => {
+  const {el,publish}=ui();const content=el('content');
+  content.scrollHeight=2000;content.clientHeight=400;content.scrollTop=100;
+  publish({messages:[{role:'assistant',content:'回答'}]});
+  assert.equal(content.scrollTop,100);assert.equal(el('latest').hidden,false);
+  el('latest').emit('click');assert.equal(content.scrollTop,2000);assert.equal(el('latest').hidden,true);
+});
+
+test('入力欄は高さを調整し、回答コピーは本文ではなく履歴の位置を送る', () => {
+  const {el,sent,publish}=ui();el('prompt').scrollHeight=300;el('prompt').emit('input');
+  assert.equal(el('prompt').style.height,'220px');
+  publish({messages:[{role:'assistant',content:'回答'}]});
+  el('messages').children[0].children[0].children[1].emit('click');
+  assert.equal(sent.at(-1).type,'copyAnswer');assert.equal(sent.at(-1).index,0);
 });
 
 test('Webviewの上キーで入力を呼び出す。IME・修飾キーは履歴操作にしない', () => {
@@ -8515,7 +8618,7 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 クリックするとサイドバーチャットが開きます。ライト・ダークテーマに対応しています。
 ツールバーの幅が狭い場合はVS Codeのレイアウトにより `…` メニュー内に入ることがあります。
 チャットは右側に独立した「都立AI」タブとして表示され、境界をドラッグして幅を変更できます。
-入力欄は下部に固定され、Cmd/Ctrl + Enterで送信できます。Chatsから直近の会話を開き直せます。
+入力欄は下部に固定され、Enterで送信、Shift + Enterで改行します（Cmd/Ctrl + Enterも利用可能）。日本語変換中は送信しません。入力欄は内容に応じて伸縮します。Escまたは停止ボタンで一時停止し、内容を変更して再送できます。添付・リンク・現在のファイルは「＋」から選びます。履歴から直近の会話を開き直せます。回答の「コピー」で全文をコピーできます。過去の回答を読み返している間は自動スクロールせず、「最新へ」で末尾に戻れます。
 
 ## リンクを参考に作成
 
