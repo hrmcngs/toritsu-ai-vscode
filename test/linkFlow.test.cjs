@@ -188,3 +188,28 @@ test('既存ファイルの作成衝突を検出したら現在の内容で再�
   assert.equal(state().messages.length, 2); assert.match(state().messages[1].content, /merged/);
   assert.match(state().notice, /変更を適用/);
 });
+
+test('生成途中の表示は履歴へ保存せず、完成時だけ確定する', async t => {
+  let finish;
+  const { provider, state } = setup(t, async (_messages, _signal, onDelta) => {
+    onDelta('途中の文章');
+    await new Promise(resolve => { finish = resolve; });
+    return '途中の文章と完成部分';
+  });
+  const pending = provider.receive({type:'send',text:'説明して'});
+  while (!finish) await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(state().partialAnswer,'途中の文章');assert.equal(state().messages.length,0);
+  finish();await pending;
+  assert.equal(state().partialAnswer,'');assert.equal(state().messages.at(-1).content,'途中の文章と完成部分');
+});
+
+test('生成中に停止したら遅い差分・履歴・ファイル適用を破棄する', async t => {
+  let finish;
+  const { provider, state } = setup(t, async (_messages, _signal, onDelta) => {
+    onDelta('途中');await new Promise(resolve=>{finish=resolve;});onDelta('遅い差分');return '完成';
+  });
+  const pending=provider.receive({type:'send',text:'説明して'});
+  while(!finish) await new Promise(resolve=>setImmediate(resolve));
+  await provider.receive({type:'cancel'});finish();await pending;
+  assert.equal(state().partialAnswer,'');assert.equal(state().messages.length,0);
+});

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { LlmClient } from './llmClient';
+import { LlmClient, OnDelta } from './llmClient';
 import { Message } from '../types/ai';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
@@ -73,8 +73,8 @@ export class ApprovalService {
 
 export class ApprovedClient implements LlmClient {
   constructor(private readonly approvals: ApprovalService, private readonly client: LlmClient) {}
-  async complete(messages: readonly Message[], signal?: AbortSignal): Promise<string> {
+  async complete(messages: readonly Message[], signal?: AbortSignal, onDelta?: OnDelta): Promise<string> {
     await this.approvals.approveSend(signal);
-    return this.client.complete(messages, signal);
+    return this.client.complete(messages, signal, onDelta);
   }
 }

@@ -25,6 +25,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       chatEndpoint: config.get<string>('chatEndpoint', '/v1/chat/completions'),
       authHeader: config.get<string>('authHeader', 'Authorization'),
       apiKeyPrefix: config.get<string>('apiKeyPrefix', 'Bearer'),
+      streamResponses: config.get<boolean>('streamResponses', true),
       timeoutMs: config.get<number>('requestTimeoutSeconds', 180) * 1000
     };
   }, () => context.secrets.get(API_KEY_SECRET));
@@ -37,14 +38,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       timeoutMs: config.get<number>('modelListTimeoutSeconds', 30) * 1000 };
   }, () => context.secrets.get(API_KEY_SECRET));
   const models = new ModelSelection(signal => catalog.listModels(signal), signal => setup.ensureConnection(signal));
-  const readyClient: LlmClient = { complete: async (messages, signal) => {
+  const readyClient: LlmClient = { complete: async (messages, signal, onDelta) => {
     await setup.ensureConnection(signal);
     if (!usesToritsuPublicApi() && !vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) {
       await models.select('custom', signal);
     }
     if (signal?.aborted) throw new Error('送信をキャンセルしました。');
     if (!usesToritsuPublicApi() && !vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) throw new Error('モデルを選択してから送信してください。');
-    return new ApprovedClient(approvals, transport).complete(messages, signal);
+    return new ApprovedClient(approvals, transport).complete(messages, signal, onDelta);
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
   const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);

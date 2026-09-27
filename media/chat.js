@@ -72,6 +72,7 @@
     }
   }
   function renderMessages() {
+    const follow = el('content').scrollHeight - el('content').scrollTop - el('content').clientHeight < 100;
     el('messages').replaceChildren();
     const messages = [...(state.messages ?? [])];
     if (submission) messages.push({ role: 'user', content: submission.text, status: submission.status });
@@ -97,17 +98,22 @@
       }
       el('messages').append(article);
     }
-    if (submission?.status === 'sending' && !state.approvalRequest) {
+    if ((submission?.status === 'sending' || state.partialAnswer) && !state.approvalRequest) {
       const waiting = document.createElement('article'); waiting.className = 'assistant response-waiting';
       const label = document.createElement('strong'); label.textContent = '都立AI';
-      const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = '回答を待っています…';
-      waiting.append(label, content); el('messages').append(waiting);
+      const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = state.partialAnswer ? (state.displayMode === 'received' ? '回答を表示中（受信済み）…' : '生成中…') : '回答を待っています…';
+      waiting.append(label, content);
+      if (state.partialAnswer) {
+        const preview = document.createElement('pre'); preview.className = 'streaming-preview';
+        preview.textContent = streamingPreview(state.partialAnswer); waiting.append(preview);
+      }
+      el('messages').append(waiting);
     }
-    if (submission) {
+    if (submission || state.partialAnswer) {
       el('welcome').hidden = true; el('messages').hidden = false; el('recent').hidden = true;
     }
     prompt.placeholder = submission?.status === 'sending' ? '送信中…停止ボタンで入力を編集できます' : defaultPlaceholder;
-    if (messages.length) el('content').scrollTop = el('content').scrollHeight;
+    if (messages.length && follow) el('content').scrollTop = el('content').scrollHeight;
   }
   const modes = { ask: '毎回確認', auto: '自動承認', full: 'フルアクセス' };
   const imageLimit = 5 * 1024 * 1024;

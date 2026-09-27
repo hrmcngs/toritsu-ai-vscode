@@ -21,4 +21,5 @@ export interface ClientConfig {
   authHeader: string;
   apiKeyPrefix: string;
   timeoutMs?: number;
+  streamResponses?: boolean;
 }

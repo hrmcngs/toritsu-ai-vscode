@@ -1,7 +1,9 @@
 import { ClientConfig, Message } from '../types/ai';
-import { LlmClient } from './llmClient';
+import { LlmClient, OnDelta } from './llmClient';
 import { ApiProtocol, OpenAiCompatibleProtocol, ToritsuPublicProtocol } from './apiProtocol';
 import { isToritsuPublicApi } from './toritsuPublicApi';
+
+import { readChatStream } from './chatStream';
 
 export const API_KEY_SECRET = 'toritsuAI.apiKey';
 
@@ -12,10 +14,10 @@ export class ToritsuAiClient implements LlmClient {
     private readonly protocol?: ApiProtocol
   ) {}
 
-  async complete(messages: readonly Message[], signal?: AbortSignal): Promise<string> {
+  async complete(messages: readonly Message[], signal?: AbortSignal, onDelta?: OnDelta): Promise<string> {
     const config = this.getConfig();
     const publicApi = isToritsuPublicApi(config);
-    const protocol = this.protocol ?? (publicApi ? new ToritsuPublicProtocol() : new OpenAiCompatibleProtocol());
+    const protocol: ApiProtocol = this.protocol ?? (publicApi ? new ToritsuPublicProtocol() : new OpenAiCompatibleProtocol());
     if (!config.baseUrl.trim() || (!publicApi && !config.model.trim())) {
       throw new Error('設定で toritsuAI.baseUrl と toritsuAI.model を指定してください。');
     }
@@ -46,11 +48,14 @@ export class ToritsuAiClient implements LlmClient {
       const headers = protocol.headers(config, key);
       const response = await fetch(url, {
         method: 'POST', headers, redirect: 'error', signal: controller.signal,
-        body: JSON.stringify(protocol.request(config, messages))
+        body: JSON.stringify(onDelta && config.streamResponses !== false && protocol.streamRequest ? protocol.streamRequest(config, messages) : protocol.request(config, messages))
       });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`APIエラー (HTTP ${response.status})。認証、モデル、接続先、利用制限を確認してください。`);
+      }
+      if (onDelta && config.streamResponses !== false && protocol.streamRequest && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream') {
+        return await readChatStream(response, onDelta, controller.signal);
       }
       const body: unknown = await response.json();
       return protocol.response(body);

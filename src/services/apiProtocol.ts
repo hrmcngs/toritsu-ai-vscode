@@ -5,9 +5,13 @@ export interface ApiProtocol {
   headers(config: ClientConfig, apiKey: string): Headers;
   request(config: ClientConfig, messages: readonly Message[]): unknown;
   response(body: unknown): string;
+  streamRequest?(config: ClientConfig, messages: readonly Message[]): unknown;
 }
 
 export class OpenAiCompatibleProtocol implements ApiProtocol {
+  streamRequest(config: ClientConfig, messages: readonly Message[]): unknown {
+    return { model: config.model, messages, temperature: 0.2, stream: true };
+  }
   headers(config: ClientConfig, apiKey: string): Headers {
     const headers = new Headers({ 'Content-Type': 'application/json' });
     headers.set(config.authHeader, [config.apiKeyPrefix.trim(), apiKey].filter(Boolean).join(' '));

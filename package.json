@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIによるコード説明、選択範囲編集、サイドバーチャット",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "publisher": "toritsu-ai-local",
   "private": true,
   "repository": {
@@ -173,6 +173,12 @@
           "maximum": 120,
           "scope": "machine",
           "description": "モデル一覧APIの応答を待つ秒数。"
+        },
+        "toritsuAI.streamResponses": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "OpenAI互換APIの回答をストリーミングで受信します。非対応の接続先ではオフにしてください。授業用APIは一括受信後に順次表示します。"
         }
       }
     }
