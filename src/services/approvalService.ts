@@ -34,7 +34,7 @@ export class ApprovalService {
   async setMode(value: unknown): Promise<void> {
     if (value !== 'ask' && value !== 'auto' && value !== 'full') throw new Error('不正な承認モードです。');
     if (value === 'full' && this.mode !== 'full') {
-      if (!await this.confirm({ title: 'フルアクセスに変更', detail: 'API送信・新規ファイル作成・選択編集の確認を省略します。添付した既存ファイルの編集にも適用します。シェル実行は対象外です。' }, '確認なしにする')) return;
+      if (!await this.confirm({ title: 'フルアクセスに変更', detail: 'API送信・新規ファイル作成・選択編集の確認を省略します。指定先の既存ファイルの編集にも適用します。シェル実行は対象外です。' }, '確認なしにする')) return;
     }
     await vscode.workspace.getConfiguration('toritsuAI').update('approvalMode', value, vscode.ConfigurationTarget.Global);
   }

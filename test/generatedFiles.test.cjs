@@ -15,6 +15,7 @@ Module._load = function(name, ...args) {
       replace(uri, range, content) { this.entries.push({ uri, range, content, replace: true }); } },
     workspace: {
       getConfiguration: () => ({ get: () => mode }),
+      get textDocuments() { return [...documents.values()]; },
       get isTrusted() { return trusted; }, get workspaceFolders() { return folders; },
       registerTextDocumentContentProvider: (_scheme, provider) => { preview = provider.provideTextDocumentContent(); return { dispose() {} }; },
       openTextDocument: async uri => {
@@ -207,10 +208,10 @@ test('添付した既存ファイルを編集し、Undo可能な未保存ドキ�
   assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
 });
 
-test('未添付・添付後に変更・original不一致の場合は既存ファイルを編集しない', async t => {
+test('未読のoriginalは実ファイルで再生成し、読込後に変更されたファイルは保護する', async t => {
   const { root, file, changes, sources, controller } = await editFixture(t); mode = 'full';
-  await assert.rejects(createGeneratedFiles(changes, controller.signal, () => true, root), /添付/);
-  await assert.rejects(createGeneratedFiles([{ ...changes[0], original: 'wrong' }], controller.signal, () => true, root, undefined, sources), /添付/);
+  await assert.rejects(createGeneratedFiles(changes, controller.signal, () => true, root), /編集案を作り直し/);
+  await assert.rejects(createGeneratedFiles([{ ...changes[0], original: 'wrong' }], controller.signal, () => true, root, undefined, sources), /編集案を作り直し/);
   await fs.writeFile(file, 'user edit');
   await assert.rejects(createGeneratedFiles(changes, controller.signal, () => true, root, undefined, sources), /変更/);
   assert.equal(edits, 0);
@@ -258,4 +259,40 @@ test('内容が異なる新規作成候補は既存内容を読み込み、変�
     return true;
   });
   assert.equal(edits, 0); assert.equal(await fs.readFile(path.join(root, '.gitmessage.txt'), 'utf8'), '既存の設定\n');
+});
+
+test('未添付の既存編集は実ファイルを読み直し、各モードの承認に従って適用する', async t => {
+  const { ExistingFilesNeedEditing } = require('../dist/services/generatedFiles');
+  for (const approvalMode of ['ask', 'auto', 'full']) {
+    const { root, file, changes, controller } = await editFixture(t); mode = approvalMode;
+    let snapshot;
+    await assert.rejects(createGeneratedFiles([{ ...changes[0], original: 'AIが推測した元の内容' }], controller.signal, () => true, root), error => {
+      assert.ok(error instanceof ExistingFilesNeedEditing);
+      snapshot = error.sources;
+      assert.equal(snapshot[0].text, 'before\n');
+      return true;
+    });
+    assert.equal(edits, 0);
+    let confirmations = 0;
+    onConfirm = async () => { confirmations++; };
+    if (approvalMode === 'ask') {
+      assert.match(await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, snapshot), /キャンセル/);
+      assert.equal(edits, 0); assert.equal(documents.get(file).getText(), 'before\n');
+      choice = '作成を許可';
+    }
+    await createGeneratedFiles(changes, controller.signal, () => true, root, undefined, snapshot);
+    assert.equal(documents.get(file).getText(), 'after\n');
+    assert.equal(confirmations, approvalMode === 'ask' ? 2 : 0);
+    assert.equal(await fs.readFile(file, 'utf8'), 'before\n');
+  }
+});
+
+test('未添付ファイルの自動読込でも未保存編集とシンボリックリンクを保護する', async t => {
+  const { root, file, changes, controller } = await editFixture(t);
+  documents.set(file, { uri: uri(file), isDirty: true });
+  await assert.rejects(createGeneratedFiles(changes, controller.signal, () => true, root), /未保存/);
+  documents.clear();
+  await fs.symlink(file, path.join(root, 'link.txt'));
+  await assert.rejects(createGeneratedFiles([{path:'link.txt',original:'guess',content:'new'}],controller.signal,()=>true,root),/シンボリックリンク/);
+  assert.equal(edits, 0);
 });

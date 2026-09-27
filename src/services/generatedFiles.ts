@@ -117,7 +117,7 @@ export async function createGeneratedFiles(files: readonly GeneratedFile[], sign
   await validateCreationTargets(root, files, true);
   const conflicts: string[] = [];
   const unchanged = new Set<string>();
-  for (const file of files.filter(file => file.original === undefined)) {
+  for (const file of files) {
     const target = join(root, file.path);
     let exists = true;
     try { await lstat(target); } catch (error) {
@@ -127,6 +127,16 @@ export async function createGeneratedFiles(files: readonly GeneratedFile[], sign
     if (!exists) continue;
     const open = vscode.workspace.textDocuments?.find(document => document.uri.scheme === 'file' && document.uri.fsPath === target);
     if (open?.isDirty) throw new Error(`未保存の編集があります。保存してから再実行してください: ${file.path}`);
+    if (file.original !== undefined) {
+      let supplied = false;
+      for (const source of sources) {
+        if (source.text === file.original && await realpath(source.path) === target) { supplied = true; break; }
+      }
+      // An AI-provided original is not a snapshot. Read the actual target and
+      // regenerate against it, just as for a create proposal colliding with a file.
+      if (!supplied) conflicts.push(target);
+      continue;
+    }
     if (await readFile(target, 'utf8') === file.content) unchanged.add(file.path);
     else conflicts.push(target);
   }
@@ -147,7 +157,7 @@ export async function createGeneratedFiles(files: readonly GeneratedFile[], sign
     for (const source of sources) {
       if (source.text === file.original && await realpath(source.path) === target) { supplied = true; break; }
     }
-    if (!supplied) throw new Error(`編集対象を「＋」のファイルから添付し、もう一度依頼してください: ${file.path}`);
+    if (!supplied) throw new Error(`読み込んだ編集対象と一致しません。もう一度依頼してください: ${file.path}`);
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
     if (document.isDirty || document.getText() !== file.original || await readFile(target, 'utf8') !== file.original) {
       throw new Error(`添付後に変更されたか、未保存の編集があります。保存して添付し直してください: ${file.path}`);
