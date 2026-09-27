@@ -409,3 +409,13 @@ export async function exampleA1(context: vscode.ExtensionContext): Promise<strin
 正式仕様が分かったら `A1Adapter` の認証・request・responseを実装して `createA1Client(secrets, adapter)` に注入できます。アダプターには解決済みのmodeも渡るため、公式modeパラメータがある場合に変換できます。URL等は設定注入を維持します。正式ストリーミング対応には、その仕様に合わせた通信処理の追加も必要です。
 
 提示されたA1のデータ非学習・情報管理の前提は、任意のOpenAI互換接続先に自動的に当てはまるものではありません。実際の接続先の利用条件、入力データの扱い、運用ルールを確認してください。
+
+## バージョン更新とMarketplace自動公開
+
+`main`に実装・配布設定をpushすると、GitHub Actionsの `Publish Extension` がテスト、公開権限確認、パッチ番号の更新、VSIX作成、Marketplaceへの公開を実行します。package.jsonとpackage-lock.jsonの番号はbotが同時に更新します。botのGITHUB_TOKENによるpushは公開ワークフローを再実行しません。README・CODE.mdだけの変更では公開せず、Actionsから手動実行できます。
+
+初回のみ、GitHubリポジトリの Settings → Secrets and variables → Actions → New repository secret で `VSCE_PAT` を登録してください。値は発行者 `hrmcngs` に公開できるアカウントのMarketplace Manage権限付きトークンです。都立AIのAPIキーとは別物です。チャットやソースコードに貼らないでください。MC Mod UtilityリポジトリのSecretは、このリポジトリには自動共有されません。
+
+Secret未登録・権限不足・テスト失敗では番号を更新しません。ブランチ保護でbotのmainへのpushが拒否された場合も公開前に止まります。公開自体に失敗した場合、番号を記録するコミットだけが残ることがあります。原因を解消後、Actions → Publish Extension → Run workflow → main で再実行してください。その場合は次のパッチ番号を使用します。タグ付けだけ失敗した場合は、Marketplaceの公開状況を確認してください。作成したVSIXは各実行のArtifactsから取得できます。
+
+Marketplaceから導入した利用者への更新は、VS Code側で拡張機能の自動更新が有効な場合に配信されます。ローカルファイルの編集だけでは公開しません。

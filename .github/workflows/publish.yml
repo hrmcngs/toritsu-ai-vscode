@@ -1,0 +1,87 @@
+name: Publish Extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'media/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.vscodeignore'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-extension
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check publisher and secret registration
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          node <<'NODE'
+          const manifest = require('./package.json');
+          if (manifest.publisher !== 'hrmcngs') throw new Error('Expected publisher hrmcngs.');
+          if (!process.env.VSCE_PAT) throw new Error('Add the VSCE_PAT repository secret before publishing.');
+          NODE
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Verify Marketplace access before changing the version
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install vsce verify-pat hrmcngs
+
+      - name: Increment patch version
+        id: version
+        run: |
+          npm version patch --no-git-tag-version
+          node -e 'console.log("value=" + require("./package.json").version)' >> "$GITHUB_OUTPUT"
+
+      - run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toritsu-ai-${{ steps.version.outputs.value }}
+          path: toritsu-ai.vsix
+          if-no-files-found: error
+
+      - name: Save release version before publishing
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "chore: release ${{ steps.version.outputs.value }}"
+          git push origin HEAD:main
+
+      - name: Publish the verified VSIX
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install vsce publish --packagePath toritsu-ai.vsix
+
+      - name: Tag published release
+        run: |
+          git tag "v${{ steps.version.outputs.value }}"
+          git push origin "v${{ steps.version.outputs.value }}"
