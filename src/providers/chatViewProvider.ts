@@ -159,7 +159,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.signingIn = true; this.error = ''; this.publish();
         try {
           await this.auth.signIn();
-          if (this.auth.session) await vscode.commands.executeCommand('toritsuAI.setupConnection');
         }
         finally { this.signingIn = false; }
         return;

@@ -1,13 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
-let config, choice, inputs, prompts;
+let config, choice, inputs, prompts, pickPrompts = 0;
 const original = Module._load;
 Module._load = function(name, ...args) {
   if (name === 'vscode') return {
     ConfigurationTarget: { Global: 1 }, CancellationTokenSource: class { token = {}; cancel() {} dispose() {} },
     workspace: { getConfiguration: () => ({ get: (key, fallback) => config[key] ?? fallback, update: async (key,value) => { config[key] = value; } }) },
-    window: { showQuickPick: async () => choice, showInputBox: async () => { prompts++; return inputs.shift(); } }
+    window: { showQuickPick: async () => { pickPrompts++; return choice; }, showInputBox: async () => { prompts++; return inputs.shift(); } }
   };
   return original.call(this, name, ...args);
 };
@@ -75,4 +75,28 @@ test('設定画面を閉じた場合は通常のエラーと区別し、登録�
   choice = { id: 'toritsu' };
   await setup.ensureConnection();
   assert.equal(key, 'saved-key'); assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+});
+
+test('初期設定は授業用APIを自動設定し、キー入力1回だけで利用できる', async () => {
+  const { configureDefaultConnection } = require('../dist/services/connectionSetup');
+  config = {}; prompts = 0; pickPrompts = 0; inputs = ['my-key'];
+  await configureDefaultConnection();
+  let key;
+  await new ConnectionSetup({ get: async () => key, store: async (_name, value) => { key = value; } }).ensureConnection();
+  assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+  assert.equal(config.chatEndpoint, '/api/v1/public/message');
+  assert.equal(config.authHeader, 'Authorization'); assert.equal(config.apiKeyPrefix, 'Bearer');
+  assert.equal(config.model, undefined); assert.equal(key, 'my-key');
+  assert.equal(prompts, 1); assert.equal(pickPrompts, 0);
+});
+
+test('保存済みキーと未設定URLはキー再入力なしで使え、独自接続先は維持する', async () => {
+  const { configureDefaultConnection } = require('../dist/services/connectionSetup');
+  config = { baseUrl: '' }; prompts = 0; pickPrompts = 0;
+  await configureDefaultConnection();
+  await new ConnectionSetup({ get: async () => 'saved-key', store: async () => assert.fail() }).ensureConnection();
+  assert.equal(prompts, 0); assert.equal(pickPrompts, 0);
+  config = { baseUrl: 'https://custom.example', chatEndpoint: '/custom', authHeader: 'X-Key', apiKeyPrefix: '' };
+  const original = { ...config }; await configureDefaultConnection();
+  assert.deepEqual(config, original);
 });

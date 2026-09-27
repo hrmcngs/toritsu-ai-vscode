@@ -20,7 +20,8 @@ exports.run = async function () {
   for (const file of ['media/chat.js', 'media/chat.css', 'media/icon.svg', 'dist/services/pdfWorker.js']) {
     assert.ok(fs.existsSync(path.join(extension.extensionPath, file)), `${file} が配布物に含まれている`);
   }
-  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('baseUrl'), '', '新規ユーザーには接続先が持ち込まれない');
+  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('baseUrl'), 'https://ai-api.metro.tokyo.lg.jp', '新規ユーザーには授業用APIを自動設定する');
   assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('model'), '', '新規ユーザーにはモデル設定が持ち込まれない');
+  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('chatEndpoint'), '/api/v1/public/message');
   console.log('Toritsu AI: activation and chat opening smoke test passed');
 };

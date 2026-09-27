@@ -423,7 +423,7 @@ export async function setApiKey(secrets: vscode.SecretStorage, token?: vscode.Ca
 ````typescript
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from './services/connectionSetup';
+import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE, configureDefaultConnection } from './services/connectionSetup';
 import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
@@ -437,6 +437,7 @@ import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await configureDefaultConnection();
   const auth = new AuthService(context.secrets);
   context.subscriptions.push(auth);
   await auth.restore();
@@ -772,7 +773,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.signingIn = true; this.error = ''; this.publish();
         try {
           await this.auth.signIn();
-          if (this.auth.session) await vscode.commands.executeCommand('toritsuAI.setupConnection');
         }
         finally { this.signingIn = false; }
         return;
@@ -1536,6 +1536,16 @@ import { TORITSU_API_BASE, TORITSU_API_PATH } from './toritsuPublicApi';
 
 export const CONNECTION_SETUP_NOTICE = '接続設定を閉じました。保存済みのAPIキー・設定は保持しています。接続先が未設定の場合は「接続設定」から再開してください。';
 export class ConnectionSetupCancelled extends Error {}
+
+/** Default only when no provider was configured; never replace a custom endpoint. */
+export async function configureDefaultConnection(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('toritsuAI');
+  if (config.get<string>('baseUrl', '').trim()) return;
+  await config.update('chatEndpoint', TORITSU_API_PATH, vscode.ConfigurationTarget.Global);
+  await config.update('authHeader', 'Authorization', vscode.ConfigurationTarget.Global);
+  await config.update('apiKeyPrefix', 'Bearer', vscode.ConfigurationTarget.Global);
+  await config.update('baseUrl', TORITSU_API_BASE, vscode.ConfigurationTarget.Global);
+}
 
 export class ConnectionSetup {
   private active = false;
@@ -4076,13 +4086,13 @@ test('既存ファイルの変更は削除・追加の差分として表示す�
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
-let config, choice, inputs, prompts;
+let config, choice, inputs, prompts, pickPrompts = 0;
 const original = Module._load;
 Module._load = function(name, ...args) {
   if (name === 'vscode') return {
     ConfigurationTarget: { Global: 1 }, CancellationTokenSource: class { token = {}; cancel() {} dispose() {} },
     workspace: { getConfiguration: () => ({ get: (key, fallback) => config[key] ?? fallback, update: async (key,value) => { config[key] = value; } }) },
-    window: { showQuickPick: async () => choice, showInputBox: async () => { prompts++; return inputs.shift(); } }
+    window: { showQuickPick: async () => { pickPrompts++; return choice; }, showInputBox: async () => { prompts++; return inputs.shift(); } }
   };
   return original.call(this, name, ...args);
 };
@@ -4150,6 +4160,30 @@ test('設定画面を閉じた場合は通常のエラーと区別し、登録�
   choice = { id: 'toritsu' };
   await setup.ensureConnection();
   assert.equal(key, 'saved-key'); assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+});
+
+test('初期設定は授業用APIを自動設定し、キー入力1回だけで利用できる', async () => {
+  const { configureDefaultConnection } = require('../dist/services/connectionSetup');
+  config = {}; prompts = 0; pickPrompts = 0; inputs = ['my-key'];
+  await configureDefaultConnection();
+  let key;
+  await new ConnectionSetup({ get: async () => key, store: async (_name, value) => { key = value; } }).ensureConnection();
+  assert.equal(config.baseUrl, 'https://ai-api.metro.tokyo.lg.jp');
+  assert.equal(config.chatEndpoint, '/api/v1/public/message');
+  assert.equal(config.authHeader, 'Authorization'); assert.equal(config.apiKeyPrefix, 'Bearer');
+  assert.equal(config.model, undefined); assert.equal(key, 'my-key');
+  assert.equal(prompts, 1); assert.equal(pickPrompts, 0);
+});
+
+test('保存済みキーと未設定URLはキー再入力なしで使え、独自接続先は維持する', async () => {
+  const { configureDefaultConnection } = require('../dist/services/connectionSetup');
+  config = { baseUrl: '' }; prompts = 0; pickPrompts = 0;
+  await configureDefaultConnection();
+  await new ConnectionSetup({ get: async () => 'saved-key', store: async () => assert.fail() }).ensureConnection();
+  assert.equal(prompts, 0); assert.equal(pickPrompts, 0);
+  config = { baseUrl: 'https://custom.example', chatEndpoint: '/custom', authHeader: 'X-Key', apiKeyPrefix: '' };
+  const original = { ...config }; await configureDefaultConnection();
+  assert.deepEqual(config, original);
 });
 ````
 
@@ -5000,6 +5034,14 @@ test('接続設定を閉じた場合は赤いエラーではなく再開案内�
   assert.equal(state().error, ''); assert.match(state().notice, /接続設定/);
   assert.equal(state().messages.length, 0); assert.equal(state().busy, false);
 });
+
+test('チャットのキー登録後に接続先やモデルの追加ダイアログを要求しない', async t => {
+  const { provider, state } = setup(t, async () => 'ok');
+  let registrations = 0;
+  provider.auth.signIn = async () => { registrations++; };
+  await provider.receive({ type: 'login' });
+  assert.equal(registrations, 1); assert.equal(state().error, ''); assert.equal(state().signedIn, true);
+});
 ````
 
 ### test/links.test.cjs
@@ -5462,8 +5504,9 @@ exports.run = async function () {
   for (const file of ['media/chat.js', 'media/chat.css', 'media/icon.svg', 'dist/services/pdfWorker.js']) {
     assert.ok(fs.existsSync(path.join(extension.extensionPath, file)), `${file} が配布物に含まれている`);
   }
-  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('baseUrl'), '', '新規ユーザーには接続先が持ち込まれない');
+  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('baseUrl'), 'https://ai-api.metro.tokyo.lg.jp', '新規ユーザーには授業用APIを自動設定する');
   assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('model'), '', '新規ユーザーにはモデル設定が持ち込まれない');
+  assert.equal(vscode.workspace.getConfiguration('toritsuAI').get('chatEndpoint'), '/api/v1/public/message');
   console.log('Toritsu AI: activation and chat opening smoke test passed');
 };
 ````
@@ -8107,6 +8150,8 @@ test('破棄すると一時停止の待機も解除する',async()=>{
 ````markdown
 # 都立AI VS Code Extension
 
+都立AIの授業用APIキーを登録するだけで使い始められます。接続先が未設定の場合は起動時に授業用APIを自動設定し、URL・モデルIDの入力や接続先の選択は求めません。すでに別のAPIを設定している場合は、その設定を維持します。
+
 ## 一時停止・再開・依頼の変更
 
 回答生成中の停止ボタンは一時停止として動作します。途中の回答と入力内容を残し、チャットの表示と回答の確定・ファイル適用を止めます。入力を変えずに送信すると同じリクエストの続きを表示し、入力を変更して送信すると古い生成結果を破棄して新しい依頼で生成し直します。編集中は送信ボタンを押すまで新しいAPIリクエストを送りません。
@@ -8136,7 +8181,7 @@ SSEの改行とUTF-8の処理は [HTML Standard](https://html.spec.whatwg.org/mu
 1. VS Codeで `Extensions: Install from VSIX...` を実行し、受け取ったファイルを選びます。
 2. 必要なら `Developer: Reload Window` を実行します。作業フォルダーを開いた場合は、信頼できるフォルダーか確認してください（制限モードでは動作しません）。
 3. `Toritsu AI: Open Chat` →「APIキーを登録」で、本人が発行したキーを登録します。
-4. 接続設定で「都立AIの授業用APIを使う」を選びます。授業用APIではモデルIDの入力は不要です。別のAPIを使う場合は、その提供元のURL・モデルを指定してください。
+4. そのままチャットを使えます。授業用APIのURL・モデルIDは入力不要です。別のAPIを使う場合だけ歯車から接続先を変更してください。
 5. `Toritsu AI: Check Connection` を実行し、確認に同意すると短いテストメッセージを送信します。有効な応答を受信した場合だけ成功と表示します。利用回数・料金が発生する場合があります。
 6. チャットへ質問するか、コードを選択して `Explain Code` / `Edit Selection` を実行します。
 
@@ -8154,7 +8199,7 @@ APIキー、ユーザー設定、チャット履歴はVSIXに含めません。�
 - タイムアウト: 学校・組織のネットワーク制限や接続先の稼働状況を確認してください。
 - 授業用APIで画像を送れない: 現在の授業用文字生成API接続はテキストのみ対応しています。
 
-配布時の動作確認: macOS / VS Code 1.139.1の空プロファイルで、配布VSIXから展開した拡張を起動し、全コマンドの登録・チャットを開く操作・必須ファイルの同梱・接続先とモデルが未設定であることを確認しました。
+配布時の動作確認: macOS / VS Code 1.139.1の空プロファイルで、配布VSIXから展開した拡張を起動し、全コマンドの登録・チャットを開く操作・必須ファイルの同梱・利用者個人の接続先・モデル設定を引き継がないことを確認しました。
 [VS Code公式の拡張テスト方式](https://code.visualstudio.com/api/working-with-extensions/testing-extension)を使用しています。
 
 Windows/Linuxと実際の授業用APIへの接続は、実機検証範囲に含みません。VSIXの受け渡しは利用を許可された相手に行ってください。
@@ -8211,7 +8256,7 @@ AIのファイル生成用JSONを、そのまま表示せずファイル名・�
 
 ## 授業用の都立AI API
 
-`https://ai.metro.tokyo.lg.jp/chat/public-api` で発行したキーは、「接続設定を始める」→「都立AIの授業用APIを使う」で利用できます。保存済みキーは再入力不要です。接続先が既に設定されている場合は詳細設定で以下を指定してください。
+`https://ai.metro.tokyo.lg.jp/chat/public-api` で発行したキーは、「APIキーを登録」だけで利用できます。保存済みキーは再入力不要です。接続先が既に設定されている場合は詳細設定で以下を指定してください。
 
 - `toritsuAI.baseUrl`: `https://ai-api.metro.tokyo.lg.jp`
 - `toritsuAI.chatEndpoint`: `/api/v1/public/message`
@@ -8233,7 +8278,7 @@ VS Codeのコマンドパレットで `Extensions: Install from VSIX...` を実�
 2. VS Codeでこのフォルダを開き、F5（Run Toritsu AI）を実行します。
 3. 起動したExtension Development Hostで信頼済みの作業フォルダを開きます。
 4. 右上のAIボタンを押し、「APIキーを登録」を選択します。Microsoftログインは不要です。
-5. 続けてAPIの接続先URLを設定し、取得した一覧からモデルを選択します。
+5. 授業用APIでは追加設定なしでチャットを使えます。別のAPIを利用する場合だけ接続先・モデルを設定します。
 6. キーの更新は `Toritsu AI: Set API Key`、接続設定は `Toritsu AI: Setup Connection` からも行えます。
 7. ファイルを開き、以下のコマンドを実行します。
 
@@ -8477,7 +8522,7 @@ npm test
 npm run package
 ```
 
-VS Codeでフォルダーを開いてF5を押すと開発用ウィンドウが起動します。通常のVS Codeには `Extensions: Install from VSIX...` で `toritsu-ai.vsix` をインストールします。都立AIの「APIキーを登録」から本人のキーを保存し、授業用APIまたは接続先を選びます。`Toritsu AI: Check Connection` で接続を確認できます。
+VS Codeでフォルダーを開いてF5を押すと開発用ウィンドウが起動します。通常のVS Codeには `Extensions: Install from VSIX...` で `toritsu-ai.vsix` をインストールします。都立AIの「APIキーを登録」から本人の授業用APIキーを保存すれば、そのまま利用できます。`Toritsu AI: Check Connection` で接続を確認できます。
 
 ## 7. 今後の拡張案
 

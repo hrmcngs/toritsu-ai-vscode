@@ -263,3 +263,11 @@ test('接続設定を閉じた場合は赤いエラーではなく再開案内�
   assert.equal(state().error, ''); assert.match(state().notice, /接続設定/);
   assert.equal(state().messages.length, 0); assert.equal(state().busy, false);
 });
+
+test('チャットのキー登録後に接続先やモデルの追加ダイアログを要求しない', async t => {
+  const { provider, state } = setup(t, async () => 'ok');
+  let registrations = 0;
+  provider.auth.signIn = async () => { registrations++; };
+  await provider.receive({ type: 'login' });
+  assert.equal(registrations, 1); assert.equal(state().error, ''); assert.equal(state().signedIn, true);
+});

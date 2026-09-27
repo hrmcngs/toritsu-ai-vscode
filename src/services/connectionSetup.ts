@@ -5,6 +5,16 @@ import { TORITSU_API_BASE, TORITSU_API_PATH } from './toritsuPublicApi';
 export const CONNECTION_SETUP_NOTICE = '接続設定を閉じました。保存済みのAPIキー・設定は保持しています。接続先が未設定の場合は「接続設定」から再開してください。';
 export class ConnectionSetupCancelled extends Error {}
 
+/** Default only when no provider was configured; never replace a custom endpoint. */
+export async function configureDefaultConnection(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('toritsuAI');
+  if (config.get<string>('baseUrl', '').trim()) return;
+  await config.update('chatEndpoint', TORITSU_API_PATH, vscode.ConfigurationTarget.Global);
+  await config.update('authHeader', 'Authorization', vscode.ConfigurationTarget.Global);
+  await config.update('apiKeyPrefix', 'Bearer', vscode.ConfigurationTarget.Global);
+  await config.update('baseUrl', TORITSU_API_BASE, vscode.ConfigurationTarget.Global);
+}
+
 export class ConnectionSetup {
   private active = false;
   constructor(private readonly secrets: vscode.SecretStorage) {}

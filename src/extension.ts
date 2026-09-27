@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ApiModelCatalog } from './services/modelCatalog';
-import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from './services/connectionSetup';
+import { ConnectionSetup, ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE, configureDefaultConnection } from './services/connectionSetup';
 import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection';
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
@@ -14,6 +14,7 @@ import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await configureDefaultConnection();
   const auth = new AuthService(context.secrets);
   context.subscriptions.push(auth);
   await auth.restore();
