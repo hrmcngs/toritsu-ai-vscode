@@ -53,7 +53,21 @@
   function appendAnswer(article, text, messageIndex) {
     const appendText = value => {
       if (!value.trim()) return;
-      const paragraph = document.createElement('pre'); paragraph.textContent = value; article.append(paragraph);
+      const plain = text => {
+        if (!text.trim()) return;
+        const paragraph = document.createElement('pre'); paragraph.textContent = text; article.append(paragraph);
+      };
+      let offset = 0;
+      for (const match of value.matchAll(/^```([^\n]*)\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
+        plain(value.slice(offset, match.index));
+        const card = document.createElement('details'); card.className = 'generated-file';
+        const title = document.createElement('summary');
+        title.textContent = `${match[1].trim() || 'コード'} · コードを表示`;
+        const code = document.createElement('pre'); code.textContent = match[2];
+        card.append(title, code); article.append(card);
+        offset = match.index + match[0].length;
+      }
+      plain(value.slice(offset));
     };
     let cursor = 0;
     for (const match of text.matchAll(/^```toritsu-files[^\S\r\n]*\r?\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
@@ -75,7 +89,7 @@
       files.forEach((file, index) => {
         const card = document.createElement('details'); card.className = 'generated-file';
         const key = `${messageIndex}:${match.index}:${index}:${file.path}`;
-        card.open = filePreviewOpen.get(key) ?? files.length === 1;
+        card.open = filePreviewOpen.get(key) ?? false;
         card.addEventListener('toggle', () => filePreviewOpen.set(key, card.open));
         const summary = document.createElement('summary');
         const name = document.createElement('span'); name.className = 'generated-file-name'; name.textContent = (typeof file.original === 'string' ? '編集 · ' : '') + file.path;

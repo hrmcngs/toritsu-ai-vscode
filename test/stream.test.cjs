@@ -76,9 +76,11 @@ test('長い回答でも一度に表示する文字数を増やさない', async
   assert.deepEqual(parts,['日本語🙂']);
 });
 
-test('作成途中のJSONからコードだけを安全に表示する', () => {
+test('作成途中はファイル名と進捗だけを表示しコード本文を隠す', () => {
   const prefix='候補です\n```toritsu-files\n{"files":[{"path":"main.ts","content":"';
-  assert.equal(streamingPreview(prefix+'const x = 1;\\n次の行'), '候補です\nmain.ts\nconst x = 1;\n次の行');
-  assert.equal(streamingPreview(prefix+'abc\\u65'), '候補です\nmain.ts\nabc');
+  assert.equal(streamingPreview(prefix+'const x = 1;\\n次の行'), '候補です\nmain.ts · 作成・編集の準備中…');
+  assert.equal(streamingPreview(prefix+'abc\\u65'), '候補です\nmain.ts · 作成・編集の準備中…');
+  assert.equal(streamingPreview('説明\n```ts\nconst secret = 1;'), '説明\n[コードを準備中…]');
+  assert.equal(streamingPreview('説明\n```ts\nconst x = 1;\n```\n完了'), '説明\n[コードを準備中…]\n完了');
   assert.equal(streamingPreview('<script>alert(1)</script>'),'<script>alert(1)</script>');
 });

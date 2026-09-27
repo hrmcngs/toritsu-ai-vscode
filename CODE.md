@@ -3129,7 +3129,21 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
   function appendAnswer(article, text, messageIndex) {
     const appendText = value => {
       if (!value.trim()) return;
-      const paragraph = document.createElement('pre'); paragraph.textContent = value; article.append(paragraph);
+      const plain = text => {
+        if (!text.trim()) return;
+        const paragraph = document.createElement('pre'); paragraph.textContent = text; article.append(paragraph);
+      };
+      let offset = 0;
+      for (const match of value.matchAll(/^```([^\n]*)\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
+        plain(value.slice(offset, match.index));
+        const card = document.createElement('details'); card.className = 'generated-file';
+        const title = document.createElement('summary');
+        title.textContent = `${match[1].trim() || 'コード'} · コードを表示`;
+        const code = document.createElement('pre'); code.textContent = match[2];
+        card.append(title, code); article.append(card);
+        offset = match.index + match[0].length;
+      }
+      plain(value.slice(offset));
     };
     let cursor = 0;
     for (const match of text.matchAll(/^```toritsu-files[^\S\r\n]*\r?\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
@@ -3151,7 +3165,7 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
       files.forEach((file, index) => {
         const card = document.createElement('details'); card.className = 'generated-file';
         const key = `${messageIndex}:${match.index}:${index}:${file.path}`;
-        card.open = filePreviewOpen.get(key) ?? files.length === 1;
+        card.open = filePreviewOpen.get(key) ?? false;
         card.addEventListener('toggle', () => filePreviewOpen.set(key, card.open));
         const summary = document.createElement('summary');
         const name = document.createElement('span'); name.className = 'generated-file-name'; name.textContent = (typeof file.original === 'string' ? '編集 · ' : '') + file.path;
@@ -3687,19 +3701,16 @@ class PromptHistory {
 
 if (typeof module !== 'undefined') module.exports = { PromptHistory };
 
-// Decode only complete JSON string tokens; never execute incomplete generated data.
+// Show progress and file names, never the generated source during display animation.
 function streamingPreview(text) {
-  const marker = text.indexOf('```toritsu-files');
-  if (marker < 0) return text;
-  const prefix = text.slice(0, marker);
-  const json = text.slice(marker);
-  const files = [];
-  const pattern = /"path"\s*:\s*("(?:\\.|[^"\\])*")[\s\S]*?"content"\s*:\s*"((?:\\(?:u[\da-fA-F]{4}|["\\/bfnrt])|[^"\\])*)/g;
-  for (const match of json.matchAll(pattern)) {
-    try { files.push(JSON.parse(match[1]) + '\n' + JSON.parse('"' + match[2] + '"')); }
-    catch { /* Incomplete JSON escape: wait for the next chunk. */ }
-  }
-  return prefix + (files.length ? files.join('\n\n') : 'ファイルの内容を準備中…');
+  return text.replace(/^```([^\n]*)\n([\s\S]*?)(?:^```[^\S\r\n]*\r?$|$(?![\s\S]))/gm, (_block, language, body) => {
+    if (language.trim() !== 'toritsu-files') return '[コードを準備中…]';
+    const files = [];
+    for (const match of body.matchAll(/"path"\s*:\s*("(?:\\.|[^"\\])*")/g)) {
+      try { files.push(JSON.parse(match[1])); } catch { /* Wait for a complete path. */ }
+    }
+    return files.length ? files.map(path => `${path} · 作成・編集の準備中…`).join('\n') : '[ファイルを準備中…]';
+  });
 }
 if (typeof module !== 'undefined') module.exports.streamingPreview = streamingPreview;
 ````
@@ -4292,7 +4303,7 @@ test('ファイル生成JSONをカードに変換し、改行を復元して前�
   assert.match(text, /ファイルの作成候補 · 1件/); assert.match(text, /\.gitmessage.txt/);
   assert.match(text, /# 概要\n変更内容/); assert.doesNotMatch(text, /toritsu-files|"files"|\\n/);
   const group = el('messages').children[0].children.find(item => item.className === 'generated-files');
-  assert.equal(group.children[1].open, true);
+  assert.equal(group.children[1].open, false);
 });
 
 test('複数ファイルは折りたたみ表示し、展開状態を維持する。HTMLはテキストで扱う', () => {
@@ -5897,10 +5908,12 @@ test('長い回答でも一度に表示する文字数を増やさない', async
   assert.deepEqual(parts,['日本語🙂']);
 });
 
-test('作成途中のJSONからコードだけを安全に表示する', () => {
+test('作成途中はファイル名と進捗だけを表示しコード本文を隠す', () => {
   const prefix='候補です\n```toritsu-files\n{"files":[{"path":"main.ts","content":"';
-  assert.equal(streamingPreview(prefix+'const x = 1;\\n次の行'), '候補です\nmain.ts\nconst x = 1;\n次の行');
-  assert.equal(streamingPreview(prefix+'abc\\u65'), '候補です\nmain.ts\nabc');
+  assert.equal(streamingPreview(prefix+'const x = 1;\\n次の行'), '候補です\nmain.ts · 作成・編集の準備中…');
+  assert.equal(streamingPreview(prefix+'abc\\u65'), '候補です\nmain.ts · 作成・編集の準備中…');
+  assert.equal(streamingPreview('説明\n```ts\nconst secret = 1;'), '説明\n[コードを準備中…]');
+  assert.equal(streamingPreview('説明\n```ts\nconst x = 1;\n```\n完了'), '説明\n[コードを準備中…]\n完了');
   assert.equal(streamingPreview('<script>alert(1)</script>'),'<script>alert(1)</script>');
 });
 ````
@@ -8528,7 +8541,7 @@ VS Code 1.106以上のデスクトップ版に対応。開発・パッケージ�
 
 ## チャットの順次表示
 
-OpenAI互換APIでは `stream: true` で送信し、SSEで届いた文章・コードをチャットへ順次表示します。作成途中のファイルはファイル名とコードとして表示し、完成後に通常のファイルカードへ切り替えます。途中の文字列からファイルを作成・編集することはありません。
+OpenAI互換APIでは `stream: true` で送信し、SSEで届いた文章をチャットへ順次表示します。生成中のコード本文は表示せず、ファイル名と準備中の表示にまとめます。完成したファイルカードや通常のコードブロックも初期状態では折りたたみ、クリックしたときだけコードを表示します。途中の文字列からファイルを作成・編集することはありません。
 
 現在の授業用APIの接続実装は一括応答です。この場合は回答の受信後に少しずつ表示し、画面には「回答を表示中（受信済み）」と表示します。これは表示上の演出であり、サーバーの生成途中を取得する機能ではありません。最初の応答待ち時間は短縮しません。
 

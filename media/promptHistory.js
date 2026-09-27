@@ -33,18 +33,15 @@ class PromptHistory {
 
 if (typeof module !== 'undefined') module.exports = { PromptHistory };
 
-// Decode only complete JSON string tokens; never execute incomplete generated data.
+// Show progress and file names, never the generated source during display animation.
 function streamingPreview(text) {
-  const marker = text.indexOf('```toritsu-files');
-  if (marker < 0) return text;
-  const prefix = text.slice(0, marker);
-  const json = text.slice(marker);
-  const files = [];
-  const pattern = /"path"\s*:\s*("(?:\\.|[^"\\])*")[\s\S]*?"content"\s*:\s*"((?:\\(?:u[\da-fA-F]{4}|["\\/bfnrt])|[^"\\])*)/g;
-  for (const match of json.matchAll(pattern)) {
-    try { files.push(JSON.parse(match[1]) + '\n' + JSON.parse('"' + match[2] + '"')); }
-    catch { /* Incomplete JSON escape: wait for the next chunk. */ }
-  }
-  return prefix + (files.length ? files.join('\n\n') : 'ファイルの内容を準備中…');
+  return text.replace(/^```([^\n]*)\n([\s\S]*?)(?:^```[^\S\r\n]*\r?$|$(?![\s\S]))/gm, (_block, language, body) => {
+    if (language.trim() !== 'toritsu-files') return '[コードを準備中…]';
+    const files = [];
+    for (const match of body.matchAll(/"path"\s*:\s*("(?:\\.|[^"\\])*")/g)) {
+      try { files.push(JSON.parse(match[1])); } catch { /* Wait for a complete path. */ }
+    }
+    return files.length ? files.map(path => `${path} · 作成・編集の準備中…`).join('\n') : '[ファイルを準備中…]';
+  });
 }
 if (typeof module !== 'undefined') module.exports.streamingPreview = streamingPreview;

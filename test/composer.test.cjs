@@ -182,7 +182,7 @@ test('ファイル生成JSONをカードに変換し、改行を復元して前�
   assert.match(text, /ファイルの作成候補 · 1件/); assert.match(text, /\.gitmessage.txt/);
   assert.match(text, /# 概要\n変更内容/); assert.doesNotMatch(text, /toritsu-files|"files"|\\n/);
   const group = el('messages').children[0].children.find(item => item.className === 'generated-files');
-  assert.equal(group.children[1].open, true);
+  assert.equal(group.children[1].open, false);
 });
 
 test('複数ファイルは折りたたみ表示し、展開状態を維持する。HTMLはテキストで扱う', () => {
