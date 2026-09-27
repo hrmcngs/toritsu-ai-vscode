@@ -8,7 +8,7 @@ import { openChat } from './commands/openChat';
 import { ChatViewProvider } from './providers/chatViewProvider';
 import { API_KEY_SECRET, ToritsuAiClient } from './services/toritsuAiClient';
 import { LlmClient } from './services/llmClient';
-import { errorMessage } from './utils/runRequest';
+import { errorMessage, runRequest } from './utils/runRequest';
 import { AuthService } from './services/authService';
 import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
@@ -54,7 +54,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
-    ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(); await auth.restore(); await models.select('custom'); }],
+    ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(undefined, true); await auth.restore(); await models.select('custom'); }],
+    ['toritsuAI.checkConnection', async () => {
+      await setup.ensureConnection();
+      await auth.restore();
+      if (!usesToritsuPublicApi() && !vscode.workspace.getConfiguration('toritsuAI').get<string>('model', '').trim()) {
+        await models.select('custom');
+      }
+      const answer = await vscode.window.showInformationMessage(
+        '接続先APIに「OKとだけ返信してください」を送信して確認します。コード・ファイル・会話履歴は送りません。APIの利用回数・料金が発生する場合があります。',
+        { modal: true }, '接続を確認');
+      if (answer !== '接続を確認') return;
+      await runRequest('都立AI: 接続を確認中', signal => new AuthenticatedClient(auth, transport)
+        .complete([{ role: 'user', content: 'OKとだけ返信してください' }], signal));
+      void vscode.window.showInformationMessage('都立AI: 接続を確認しました。APIから有効な回答を受信しました。');
+    }],
     ['toritsuAI.setApiKey', () => auth.signIn()],
     ['toritsuAI.explainCode', () => authorized(() => explainCode(client))],
     ['toritsuAI.editSelection', () => authorized(async () => {
