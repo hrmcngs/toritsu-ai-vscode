@@ -7,6 +7,7 @@ import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
 import { ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from '../services/connectionSetup';
 import { collectContext } from '../services/contextCollector';
+import { codingContext, isCodingRequest } from '../services/codingContext';
 import { createGeneratedFiles, ExistingFilesNeedEditing, normalizeDestinationPath, parseGeneratedFiles } from '../services/generatedFiles';
 import { chatPrompt } from '../services/promptBuilder';
 import { errorMessage } from '../utils/runRequest';
@@ -323,9 +324,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           }
           return;
         }
+        const folders = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file') ?? [];
+        if (!this.planMode && !this.generationPath && !context && !this.files.length && isCodingRequest(text) && folders.length === 1) {
+          this.files = await codingContext(folders[0].uri.fsPath, editor?.document.uri.scheme === 'file' ? editor.document.uri.fsPath : undefined, controller.signal);
+          if (controller.signal.aborted || this.auth.session?.key !== session.key) throw new Error('処理をキャンセルしました。');
+          this.notice = this.files.length ? `編集対象として読み込みました: ${this.files.map(file => file.name).join(', ')}` : '編集対象を特定できませんでした。対象ファイルを開くか「＋」から選択してください。';
+          this.publish();
+        }
         const editSources = this.files.map(file => ({ path: file.path, text: file.text }));
         if (context && editor?.document.uri.scheme === 'file') editSources.push({ path: editor.document.uri.fsPath, text: context.fullText });
-        const folders = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file') ?? [];
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
         const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory });
         let lastPublish = 0;

@@ -3,10 +3,11 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const original = Module._load;
 const noop = () => ({ dispose() {} });
+const workspace = { onDidChangeConfiguration: noop, getConfiguration: () => ({ get: (_key, fallback) => fallback }) };
 Module._load = function (name, ...args) {
   if (name === 'vscode') return {
     window: { onDidChangeActiveTextEditor: noop, showWarningMessage: async () => '削除する' },
-    workspace: { onDidChangeConfiguration: noop, getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
+    workspace
   };
   return original.call(this, name, ...args);
 };
@@ -270,4 +271,19 @@ test('チャットのキー登録後に接続先やモデルの追加ダイア�
   provider.auth.signIn = async () => { registrations++; };
   await provider.receive({ type: 'login' });
   assert.equal(registrations, 1); assert.equal(state().error, ''); assert.equal(state().signedIn, true);
+});
+
+test('編集依頼では手動添付なしでワークスペースの実コードをAPIに送る',async t=>{
+ const fs=require('node:fs/promises');const path=require('node:path');
+ const root=await fs.mkdtemp(path.join(require('node:os').tmpdir(),'toritsu-flow-'));
+ t.after(async()=>{delete workspace.workspaceFolders;await fs.rm(root,{recursive:true,force:true});});
+ await fs.writeFile(path.join(root,'index.html'),'<html>existing page</html>');
+ workspace.workspaceFolders=[{uri:{scheme:'file',fsPath:root}}];
+ let request;
+ const {provider}=setup(t,async messages=>{request=messages;return 'response';});
+ await provider.receive({type:'send',text:'ページにダークモードを追加して'});
+ const payload=JSON.parse(request.at(-1).content);
+ assert.equal(payload.files[0].text,'<html>existing page</html>');
+ assert.equal(payload.outputDirectory,root);
+ assert.match(request[0].content,/実コードを修正/);
 });
