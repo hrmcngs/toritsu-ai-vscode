@@ -47,12 +47,20 @@ export class ToritsuAiClient implements LlmClient {
     const timer = setTimeout(cancel, timeoutMs);
     try {
       const headers = protocol.headers(config, key);
+      const request = onDelta && config.streamResponses !== false && protocol.streamRequest
+        ? protocol.streamRequest(config, messages) : protocol.request(config, messages);
+      const requestBody = JSON.stringify(request);
       const response = await fetch(url, {
         method: 'POST', headers, redirect: 'error', signal: controller.signal,
-        body: JSON.stringify(onDelta && config.streamResponses !== false && protocol.streamRequest ? protocol.streamRequest(config, messages) : protocol.request(config, messages))
+        body: requestBody
       });
       if (!response.ok) {
-        throw await apiError(response, publicApi);
+        const error = await apiError(response, publicApi);
+        const input = (request as { input?: unknown } | null)?.input;
+        if (publicApi && response.status === 400 && typeof input === 'string') {
+          error.message += ` 送信量: ${Array.from(input).length}文字（指示・履歴・添付を含む）、リクエスト ${Buffer.byteLength(requestBody, 'utf8')}バイト。`;
+        }
+        throw error;
       }
       if (onDelta && config.streamResponses !== false && protocol.streamRequest && response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream') {
         return await readChatStream(response, onDelta, controller.signal);

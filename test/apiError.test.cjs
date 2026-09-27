@@ -22,3 +22,22 @@ test('不正JSONと大きすぎる応答は本文を出さずreaderを閉じる'
     assert.match(error.message,/HTTP 400/);assert.doesNotMatch(error.message,/not json|xxxxx/);
   }
 });
+
+test('階層化した入力エラーも分類し、入力本文は公開しない',async()=>{
+  const error=await apiError(response({detail:[{type:'string_too_long',msg:'String should have at most 1000 characters',input:'PRIVATE_INPUT'}]}),true);
+  assert.match(error.message,/入力の長さ/);
+  assert.doesNotMatch(error.message,/PRIVATE_INPUT|1000/);
+});
+
+test('授業用400には実際の送信量だけを追加する',async t=>{
+  const {ToritsuAiClient}=require('../dist/services/toritsuAiClient');
+  const {TORITSU_API_BASE,TORITSU_API_PATH}=require('../dist/services/toritsuPublicApi');
+  let body;
+  t.mock.method(globalThis,'fetch',async(_url,init)=>{body=init.body;return response({detail:'private server details'});});
+  const client=new ToritsuAiClient(()=>({baseUrl:TORITSU_API_BASE,chatEndpoint:TORITSU_API_PATH,model:'',authHeader:'Authorization',apiKeyPrefix:'Bearer'}),async()=>'PRIVATE_KEY');
+  await assert.rejects(client.complete([{role:'user',content:'秘密🙂'}]),error=>{
+    assert.ok(error.message.includes(`3文字（指示・履歴・添付を含む）、リクエスト ${Buffer.byteLength(body)}バイト`));
+    assert.doesNotMatch(error.message,/秘密|PRIVATE_KEY|private server/);
+    return true;
+  });
+});
