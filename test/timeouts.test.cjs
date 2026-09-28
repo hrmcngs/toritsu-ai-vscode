@@ -18,11 +18,19 @@ for (const [title, expected, options, kind] of [
   }));
   const client = kind === 'chat' ? new ToritsuAiClient(() => ({ ...base, ...options }), async () => 'dummy')
     : new ApiModelCatalog(() => ({ ...base, ...options }), async () => 'dummy');
-  await assert.rejects(kind === 'chat' ? client.complete([]) : client.listModels(), new RegExp(`タイムアウト.*${expected / 1000}秒`));
+  await assert.rejects(kind === 'chat' ? client.complete([]) : client.listModels(), { message: new RegExp(`^APIのタイムアウト.*${expected / 1000}秒`) });
 });
 
-test('サーバーが返したHTTP 504をローカル待機時間の問題と区別する', async t => {
-  t.mock.method(global, 'fetch', async () => new Response('', { status: 504 }));
+for (const status of [408, 504]) test(`HTTP ${status}はAPIのタイムアウトとして表示する`, async t => {
+  t.mock.method(global, 'fetch', async () => new Response('', { status }));
+  for (const operation of [
+    () => new ToritsuAiClient(() => base, async () => 'dummy').complete([]),
+    () => new ApiModelCatalog(() => base, async () => 'dummy').listModels()
+  ]) await assert.rejects(operation(), error => error.message.startsWith('APIのタイムアウト') && error.message.includes(`HTTP ${status}`) && !/180秒/.test(error.message));
+});
+
+test('手動キャンセルをAPIのタイムアウトと表示しない', async () => {
+  const controller = new AbortController(); controller.abort();
   const client = new ToritsuAiClient(() => base, async () => 'dummy');
-  await assert.rejects(client.complete([]), error => /HTTP 504/.test(error.message) && !/180秒/.test(error.message));
+  await assert.rejects(client.complete([], controller.signal), error => /キャンセル/.test(error.message) && !/タイムアウト/.test(error.message));
 });

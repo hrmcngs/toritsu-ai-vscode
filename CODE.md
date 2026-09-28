@@ -90,7 +90,7 @@ toritsu-ai-vscode/
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "publisher": "hrmcngs",
   "private": true,
   "repository": {
@@ -2273,6 +2273,9 @@ export class ApiModelCatalog implements ModelCatalog {
       const response = await fetch(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' });
       if (!response.ok) {
         await response.body?.cancel();
+        if (response.status === 408 || response.status === 504) {
+          throw new Error(`APIのタイムアウト (HTTP ${response.status})。モデル一覧の接続先サーバーで待機時間を超えました。時間を置いて再試行してください。`);
+        }
         throw new Error(`モデル一覧を取得できません（HTTP ${response.status}）。接続先の一覧API・認証設定を確認してください。`);
       }
       const reader = response.body?.getReader();
@@ -2297,8 +2300,8 @@ export class ApiModelCatalog implements ModelCatalog {
       if (controller.signal.aborted) throw new Error('モデル一覧の取得を中止しました。');
       return [...new Set(ids)].sort();
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `モデル一覧の取得がタイムアウトしました（${timeoutMs / 1000}秒）。modelListTimeoutSecondsを調整できます。`);
-      if (error instanceof Error && /^(モデル|利用できる)/.test(error.message)) throw error;
+      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `APIのタイムアウト（${timeoutMs / 1000}秒）。モデル一覧の応答待ちが上限を超えました。modelListTimeoutSecondsを調整できます。`);
+      if (error instanceof Error && /^(モデル|利用できる|APIのタイムアウト)/.test(error.message)) throw error;
       throw new Error('モデル一覧に接続できませんでした。接続設定と一覧APIの対応状況を確認してください。');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
@@ -2655,9 +2658,9 @@ export class ToritsuAiClient implements LlmClient {
       return protocol.response(body);
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
+        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIのタイムアウト（${timeoutMs / 1000}秒）。応答の待機時間を超えました。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
       }
-      if (error instanceof Error && /^(APIエラー|API応答)/.test(error.message)) throw error;
+      if (error instanceof Error && /^(APIエラー|API応答|APIのタイムアウト)/.test(error.message)) throw error;
       throw new Error('APIへの接続または応答の解析に失敗しました。URL、ネットワーク、API仕様を確認してください。');
     } finally {
       clearTimeout(timer);
@@ -2783,6 +2786,10 @@ export class PauseGate {
 ````typescript
 /** Read bounded JSON errors and expose only known categories, never server text or credentials. */
 export async function apiError(response: Response, classroom: boolean): Promise<Error> {
+  if (response.status === 408 || response.status === 504) {
+    await response.body?.cancel().catch(() => {});
+    return new Error(`APIのタイムアウト (HTTP ${response.status})。接続先サーバーで待機時間を超えました。時間を置いて再送信してください。`);
+  }
   let hint = '';
   if (response.headers.get('content-type')?.includes('json') && response.body) {
     const reader = response.body.getReader();
@@ -5879,13 +5886,21 @@ for (const [title, expected, options, kind] of [
   }));
   const client = kind === 'chat' ? new ToritsuAiClient(() => ({ ...base, ...options }), async () => 'dummy')
     : new ApiModelCatalog(() => ({ ...base, ...options }), async () => 'dummy');
-  await assert.rejects(kind === 'chat' ? client.complete([]) : client.listModels(), new RegExp(`タイムアウト.*${expected / 1000}秒`));
+  await assert.rejects(kind === 'chat' ? client.complete([]) : client.listModels(), new RegExp(`^APIのタイムアウト.*${expected / 1000}秒`));
 });
 
-test('サーバーが返したHTTP 504をローカル待機時間の問題と区別する', async t => {
-  t.mock.method(global, 'fetch', async () => new Response('', { status: 504 }));
+for (const status of [408, 504]) test(`HTTP ${status}はAPIのタイムアウトとして表示する`, async t => {
+  t.mock.method(global, 'fetch', async () => new Response('', { status }));
+  for (const operation of [
+    () => new ToritsuAiClient(() => base, async () => 'dummy').complete([]),
+    () => new ApiModelCatalog(() => base, async () => 'dummy').listModels()
+  ]) await assert.rejects(operation(), error => error.message.startsWith('APIのタイムアウト') && error.message.includes(`HTTP ${status}`) && !/180秒/.test(error.message));
+});
+
+test('手動キャンセルをAPIのタイムアウトと表示しない', async () => {
+  const controller = new AbortController(); controller.abort();
   const client = new ToritsuAiClient(() => base, async () => 'dummy');
-  await assert.rejects(client.complete([]), error => /HTTP 504/.test(error.message) && !/180秒/.test(error.message));
+  await assert.rejects(client.complete([], controller.signal), error => /キャンセル/.test(error.message) && !/タイムアウト/.test(error.message));
 });
 ````
 
@@ -6090,13 +6105,13 @@ test('授業用400には実際の送信量だけを追加する',async t=>{
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.12.1",
+      "version": "0.12.2",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",

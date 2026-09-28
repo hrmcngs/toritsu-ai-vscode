@@ -41,6 +41,9 @@ export class ApiModelCatalog implements ModelCatalog {
       const response = await fetch(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' });
       if (!response.ok) {
         await response.body?.cancel();
+        if (response.status === 408 || response.status === 504) {
+          throw new Error(`APIのタイムアウト (HTTP ${response.status})。モデル一覧の接続先サーバーで待機時間を超えました。時間を置いて再試行してください。`);
+        }
         throw new Error(`モデル一覧を取得できません（HTTP ${response.status}）。接続先の一覧API・認証設定を確認してください。`);
       }
       const reader = response.body?.getReader();
@@ -65,8 +68,8 @@ export class ApiModelCatalog implements ModelCatalog {
       if (controller.signal.aborted) throw new Error('モデル一覧の取得を中止しました。');
       return [...new Set(ids)].sort();
     } catch (error) {
-      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `モデル一覧の取得がタイムアウトしました（${timeoutMs / 1000}秒）。modelListTimeoutSecondsを調整できます。`);
-      if (error instanceof Error && /^(モデル|利用できる)/.test(error.message)) throw error;
+      if (controller.signal.aborted) throw new Error(signal?.aborted ? 'モデル選択をキャンセルしました。' : `APIのタイムアウト（${timeoutMs / 1000}秒）。モデル一覧の応答待ちが上限を超えました。modelListTimeoutSecondsを調整できます。`);
+      if (error instanceof Error && /^(モデル|利用できる|APIのタイムアウト)/.test(error.message)) throw error;
       throw new Error('モデル一覧に接続できませんでした。接続設定と一覧APIの対応状況を確認してください。');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }

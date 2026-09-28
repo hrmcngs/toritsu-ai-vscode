@@ -1,5 +1,9 @@
 /** Read bounded JSON errors and expose only known categories, never server text or credentials. */
 export async function apiError(response: Response, classroom: boolean): Promise<Error> {
+  if (response.status === 408 || response.status === 504) {
+    await response.body?.cancel().catch(() => {});
+    return new Error(`APIのタイムアウト (HTTP ${response.status})。接続先サーバーで待機時間を超えました。時間を置いて再送信してください。`);
+  }
   let hint = '';
   if (response.headers.get('content-type')?.includes('json') && response.body) {
     const reader = response.body.getReader();

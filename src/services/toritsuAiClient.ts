@@ -69,9 +69,9 @@ export class ToritsuAiClient implements LlmClient {
       return protocol.response(body);
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIがタイムアウトしました（${timeoutMs / 1000}秒）。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
+        throw new Error(signal?.aborted ? '処理をキャンセルしました。' : `APIのタイムアウト（${timeoutMs / 1000}秒）。応答の待機時間を超えました。接続先・ネットワークを確認するか、requestTimeoutSecondsを調整してください。`);
       }
-      if (error instanceof Error && /^(APIエラー|API応答)/.test(error.message)) throw error;
+      if (error instanceof Error && /^(APIエラー|API応答|APIのタイムアウト)/.test(error.message)) throw error;
       throw new Error('APIへの接続または応答の解析に失敗しました。URL、ネットワーク、API仕様を確認してください。');
     } finally {
       clearTimeout(timer);
