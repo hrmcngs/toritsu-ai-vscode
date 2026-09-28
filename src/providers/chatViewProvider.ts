@@ -22,7 +22,8 @@ import { ModelSelection } from '../services/modelSelection';
 import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/linkReader';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  private view?: vscode.WebviewView;
+  private view?: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>;
+  private panel?: vscode.WebviewPanel;
   private readonly history: ChatHistory;
   private showingHistory = false;
   private controller?: AbortController;
@@ -84,6 +85,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.panel?.dispose();
+    this.panel = undefined;
+    this.bindView(view);
+  }
+
+  openFallbackPanel(): void {
+    if (this.panel) {
+      this.panel.reveal();
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel('toritsuAI.chatPanel', '都立AI', vscode.ViewColumn.Beside, {});
+    this.panel = panel;
+    this.bindView(panel);
+    this.viewSubscriptions.push(panel.onDidDispose(() => {
+      if (this.panel === panel) this.panel = undefined;
+    }));
+  }
+
+  private bindView(view: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>): void {
     this.viewSubscriptions.forEach(item => item.dispose());
     this.view = view;
     const media = vscode.Uri.joinPath(this.extensionUri, 'media');
@@ -434,6 +454,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    this.panel?.dispose();
     this.approvalPrompt.cancel();
     this.controller?.abort();
     this.queuedSend = undefined;

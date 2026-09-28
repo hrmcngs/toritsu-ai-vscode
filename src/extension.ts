@@ -50,9 +50,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
   const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);
+  const showChat = () => openChat(() => chat.openFallbackPanel());
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
-    catch (error) { await openChat(); throw error; }
+    catch (error) { await showChat(); throw error; }
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
@@ -82,10 +83,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       });
     })],
-    ['toritsuAI.showHistory', () => authorized(async () => { await openChat(); chat.showHistory(); })],
+    ['toritsuAI.showHistory', () => authorized(async () => { await showChat(); chat.showHistory(); })],
     ['toritsuAI.signIn', () => auth.signIn()],
     ['toritsuAI.signOut', () => auth.signOut()],
-    ['toritsuAI.openChat', openChat]
+    ['toritsuAI.openChat', showChat]
   ];
   context.subscriptions.push(chat, vscode.window.registerWebviewViewProvider('toritsuAI.chat', chat));
   for (const [id, action] of commands) {

@@ -90,7 +90,7 @@ toritsu-ai-vscode/
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "publisher": "hrmcngs",
   "private": true,
   "repository": {
@@ -454,10 +454,15 @@ export async function explainCode(client: LlmClient): Promise<void> {
 ````typescript
 import * as vscode from 'vscode';
 
-export async function openChat(): Promise<void> {
+export async function openChat(openFallback: () => void): Promise<void> {
   // The view focus command reveals its current container, including after a
   // user moves the view. Do not rely on a container-specific generated command.
-  await vscode.commands.executeCommand('toritsuAI.chat.focus');
+  const commands = await vscode.commands.getCommands(true);
+  if (commands.includes('toritsuAI.chat.focus')) {
+    await vscode.commands.executeCommand('toritsuAI.chat.focus');
+  } else {
+    openFallback();
+  }
 }
 ````
 
@@ -534,9 +539,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
   const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);
+  const showChat = () => openChat(() => chat.openFallbackPanel());
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
-    catch (error) { await openChat(); throw error; }
+    catch (error) { await showChat(); throw error; }
     await action();
   };
   const commands: [string, () => Promise<void>][] = [
@@ -566,10 +572,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       });
     })],
-    ['toritsuAI.showHistory', () => authorized(async () => { await openChat(); chat.showHistory(); })],
+    ['toritsuAI.showHistory', () => authorized(async () => { await showChat(); chat.showHistory(); })],
     ['toritsuAI.signIn', () => auth.signIn()],
     ['toritsuAI.signOut', () => auth.signOut()],
-    ['toritsuAI.openChat', openChat]
+    ['toritsuAI.openChat', showChat]
   ];
   context.subscriptions.push(chat, vscode.window.registerWebviewViewProvider('toritsuAI.chat', chat));
   for (const [id, action] of commands) {
@@ -701,7 +707,8 @@ import { ModelSelection } from '../services/modelSelection';
 import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/linkReader';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  private view?: vscode.WebviewView;
+  private view?: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>;
+  private panel?: vscode.WebviewPanel;
   private readonly history: ChatHistory;
   private showingHistory = false;
   private controller?: AbortController;
@@ -763,6 +770,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.panel?.dispose();
+    this.panel = undefined;
+    this.bindView(view);
+  }
+
+  openFallbackPanel(): void {
+    if (this.panel) {
+      this.panel.reveal();
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel('toritsuAI.chatPanel', '都立AI', vscode.ViewColumn.Beside, {});
+    this.panel = panel;
+    this.bindView(panel);
+    this.viewSubscriptions.push(panel.onDidDispose(() => {
+      if (this.panel === panel) this.panel = undefined;
+    }));
+  }
+
+  private bindView(view: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>): void {
     this.viewSubscriptions.forEach(item => item.dispose());
     this.view = view;
     const media = vscode.Uri.joinPath(this.extensionUri, 'media');
@@ -1113,6 +1139,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    this.panel?.dispose();
     this.approvalPrompt.cancel();
     this.controller?.abort();
     this.queuedSend = undefined;
@@ -6063,13 +6090,13 @@ test('授業用400には実際の送信量だけを追加する',async t=>{
 ````json
 {
   "name": "toritsu-ai",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "toritsu-ai",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "dependencies": {
         "cheerio": "^1.0.0",
         "ipaddr.js": "^2.2.0",
@@ -8757,7 +8784,7 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 | Toritsu AI: Set API Key | APIキーをSecretStorageに保存・上書き |
 | Toritsu AI: Explain Code | 選択があれば選択部分、なければ全文を説明。結果をMarkdownエディターで表示 |
 | Toritsu AI: Edit Selection | 1か所の選択範囲を自然言語の指示で置換。全文、選択、言語、パス、指示を送信 |
-| Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示 |
+| Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示。ビューのコマンドが未登録の場合は同じチャットをタブで表示 |
 | Toritsu AI: Connect with API Key | APIキーを登録（旧Sign Inの互換コマンド） |
 | Toritsu AI: Setup Connection | 接続先・キー・モデル一覧の設定 |
 | Toritsu AI: Show History | 保存したチャット履歴を開く |

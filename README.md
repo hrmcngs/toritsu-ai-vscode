@@ -165,7 +165,7 @@ HTTPはlocalhost/127.0.0.1/::1のみ許可します。接続設定はユーザ�
 | Toritsu AI: Set API Key | APIキーをSecretStorageに保存・上書き |
 | Toritsu AI: Explain Code | 選択があれば選択部分、なければ全文を説明。結果をMarkdownエディターで表示 |
 | Toritsu AI: Edit Selection | 1か所の選択範囲を自然言語の指示で置換。全文、選択、言語、パス、指示を送信 |
-| Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示 |
+| Toritsu AI: Open Chat | 右側のセカンダリサイドバーに都立AIチャットを表示。ビューのコマンドが未登録の場合は同じチャットをタブで表示 |
 | Toritsu AI: Connect with API Key | APIキーを登録（旧Sign Inの互換コマンド） |
 | Toritsu AI: Setup Connection | 接続先・キー・モデル一覧の設定 |
 | Toritsu AI: Show History | 保存したチャット履歴を開く |
