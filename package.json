@@ -4,6 +4,7 @@
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
   "version": "0.12.4",
   "publisher": "hrmcngs",
+  "icon": "media/extension-icon.png",
   "private": true,
   "repository": {
     "type": "git",
