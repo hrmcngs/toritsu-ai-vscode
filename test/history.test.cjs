@@ -42,7 +42,51 @@ test('再起動・APIキー削除・別アカウントでも同じPCの履歴を
   history.append('Bの質問', 'Bの回答'); await history.save();
   const restored = new ChatHistory(state); restored.setAccount('account-a'); restored.select(id);
   assert.equal(restored.messages[0].content, '保存する質問');
-  assert.equal(restored.recent.length, 2);
+  assert.equal(restored.messages[2].content, 'Bの質問');
+  assert.equal(restored.recent.length, 1);
+});
+
+test('再起動後は最新の会話を自動で開く', async () => {
+  const state = storage();
+  const history = new ChatHistory(state);
+  history.setAccount('account-a');
+  history.append('古い質問', '古い回答');
+  history.startNew();
+  history.append('最新の質問', '最新の回答');
+  await history.save();
+  const restored = new ChatHistory(state);
+  restored.setAccount('account-a');
+  assert.equal(restored.messages[0].content, '最新の質問');
+});
+
+test('最後に選択した会話コンテキストを再起動後も復元する', async () => {
+  const state = storage();
+  const history = new ChatHistory(state);
+  history.setAccount('account-a');
+  history.append('古い会話', '古い回答');
+  const oldId = history.recent[0].id;
+  history.startNew();
+  history.append('新しい会話', '新しい回答');
+  history.select(oldId);
+  await history.save();
+  const restored = new ChatHistory(state);
+  restored.setAccount('account-a');
+  assert.equal(restored.selectedId, oldId);
+  assert.equal(restored.messages[0].content, '古い会話');
+});
+
+test('新規チャット状態も保存し、再起動後に過去文脈を勝手に使わない', async () => {
+  const state = storage();
+  const history = new ChatHistory(state);
+  history.setAccount('account-a');
+  history.append('保存済み会話', '回答');
+  history.startNew();
+  await history.save();
+  const restored = new ChatHistory(state);
+  restored.setAccount('account-a');
+  assert.equal(restored.selectedId, undefined);
+  assert.deepEqual(restored.messages, []);
+  assert.equal(restored.recent.length, 1);
 });
 
 test('個別削除と全削除を保存し、削除した会話は復元しない', async () => {
@@ -59,7 +103,10 @@ test('個別削除と全削除を保存し、削除した会話は復元しな�
 test('保存途中のキー削除・アカウント変更でも共有履歴を失わない', async () => {
   const state = storage(); let release;
   const write = state.update;
-  state.update = async (...args) => { await new Promise(resolve => { release = resolve; }); await write(...args); };
+  state.update = async (...args) => {
+    if (!release) await new Promise(resolve => { release = resolve; });
+    await write(...args);
+  };
   const history = new ChatHistory(state); history.setAccount('a'); history.append('A only', 'reply');
   const saving = history.save(); history.setAccount('b'); assert.equal(history.recent[0].title, 'A only');
   history.setAccount('a'); assert.equal(history.recent[0].title, 'A only');

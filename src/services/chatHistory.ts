@@ -12,6 +12,7 @@ interface Conversation {
 }
 
 export const LOCAL_HISTORY_KEY = 'toritsuAI.history.local.v1';
+export const LOCAL_ACTIVE_CHAT_KEY = 'toritsuAI.history.active.local.v1';
 const LEGACY_HISTORY_PREFIX = 'toritsuAI.history.v1.';
 
 export class ChatHistory {
@@ -58,6 +59,13 @@ export class ChatHistory {
     }
     this.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
     this.conversations = this.conversations.slice(0, 10);
+    const active = this.storage.get<unknown>(LOCAL_ACTIVE_CHAT_KEY);
+    if (active && typeof active === 'object' && 'activeId' in active) {
+      const activeId = (active as { activeId?: unknown }).activeId;
+      this.activeId = typeof activeId === 'string' && this.conversations.some(chat => chat.id === activeId) ? activeId : undefined;
+    } else {
+      this.activeId = this.conversations[0]?.id;
+    }
   }
 
   async save(): Promise<void> {
@@ -65,8 +73,12 @@ export class ChatHistory {
     if (!key || !this.storage) return;
     // Capture the shared local snapshot before awaiting; key removal cannot erase a queued write.
     const snapshot = JSON.parse(JSON.stringify(this.conversations));
+    const activeSnapshot = { activeId: this.activeId ?? null };
     this.pendingSnapshots.set(key, snapshot);
-    const write = this.pending.then(() => this.storage!.update(key, snapshot));
+    const write = this.pending.then(async () => {
+      await this.storage!.update(key, snapshot);
+      await this.storage!.update(LOCAL_ACTIVE_CHAT_KEY, activeSnapshot);
+    });
     this.pending = write.catch(() => {});
     try {
       await write;

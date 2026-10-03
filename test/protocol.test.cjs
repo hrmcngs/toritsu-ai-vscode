@@ -94,3 +94,20 @@ test('授業用の高速・推論は回答方針と履歴量を変更し最新�
  assert.equal(fast.at(-1).content,reasoning.at(-1).content);
  assert.equal(history.length,4);
 });
+
+test('高速モードでも直前の生成ファイル履歴を要約して残す',()=>{
+ const {chatPrompt}=require('../dist/services/promptBuilder');
+ const generated='```toritsu-files\n'+JSON.stringify({files:[
+  {path:'Cargo.toml',content:'x'.repeat(3000)},
+  {path:'src/main.rs',content:'x'.repeat(3000)},
+  {path:'index.html',content:'x'.repeat(3000)}
+ ]})+'\n```';
+ const prompt=chatPrompt([
+  {role:'user',content:'ブラウザでアクセスするたびRustでランダムな人名に挨拶して'},
+  {role:'assistant',content:'候補です。\n'+generated}
+ ],'起動方法を教えて',undefined,[],[],{mode:'fast'});
+ const transcript=prompt.map(message=>typeof message.content==='string'?message.content:JSON.stringify(message.content)).join('\n');
+ assert.match(transcript,/ブラウザでアクセス/);
+ assert.match(transcript,/生成ファイル候補: Cargo\.toml, src\/main\.rs, index\.html/);
+ assert.doesNotMatch(transcript,/x{1000}/);
+});

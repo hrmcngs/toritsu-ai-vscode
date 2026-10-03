@@ -297,7 +297,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.goal = ''; this.planMode = false;
         this.showingHistory = false;
         this.sources = []; this.files = []; this.notice = '';
-        this.history.startNew(); this.error = ''; this.publish(true); return;
+        this.history.startNew(); this.error = ''; this.publish(true); await this.history.save(); return;
       }
       if (message.type === 'clear' || message.type === 'delete') {
         const session = await this.auth.requireSession();
@@ -319,7 +319,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.sources = []; this.files = []; this.notice = '';
         if (!this.auth.session) return;
         this.showingHistory = false;
-        this.history.select(message.id); this.error = ''; this.publish(true); return;
+        this.history.select(message.id); this.error = ''; this.publish(true); await this.history.save(); return;
       }
       if (message.type !== 'send' || typeof message.text !== 'string') return;
       if (this.changingModel) return;
