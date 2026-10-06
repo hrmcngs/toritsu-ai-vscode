@@ -86,6 +86,21 @@ test('画像ファイルがないドロップは理由を表示する', () => {
   assert.match(el('error').textContent, /画像ファイルを取得できません/);
 });
 
+test('生成中に履歴を開けて、再表示時にも送信済みの質問と待機表示が残る', () => {
+  const { el, publish, sent } = ui();
+  publish({ busy: true, generatingChatId: 'one', generatingInput: '処理中の質問', recent: [{ id: 'one', title: '質問', updatedAt: Date.now() }] });
+  assert.equal(el('home').disabled, false);
+  assert.equal(el('recent-list').children[0].children[0].disabled, false);
+  assert.equal(el('recent-list').children[0].children[0].children[1].textContent, '生成中');
+  assert.equal(el('messages').children[0].children[1].textContent, '処理中の質問');
+  assert.equal(el('messages').children.length, 2);
+  publish({ busy: true, backgroundGeneration: true, activeChatId: 'other' });
+  assert.equal(el('send').disabled, true);
+  const count = sent.length;
+  el('prompt').value = '別の質問'; el('form').emit('submit');
+  assert.equal(sent.length, count);
+});
+
 test('回答のMarkdownを見出し・太字・引用・リスト・表として表示する', () => {
   const { el, publish } = ui();
   publish({ messages: [{ role: 'assistant', content: '## まとめ\n\n**重要**\n\n> 引用\n\n1. 最初\n2. 次\n\n| 項目 | 時間 |\n| --- | --- |\n| 説明 | 3分 |' }] });

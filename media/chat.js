@@ -122,6 +122,7 @@
     el('messages').replaceChildren();
     const messages = [...(state.messages ?? [])];
     if (submission) messages.push({ role: 'user', content: submission.text, status: submission.status });
+    else if (state.generatingInput && !state.backgroundGeneration) messages.push({ role: 'user', content: state.generatingInput, status: 'sending' });
     for (const [messageIndex, message] of messages.entries()) {
       const article = document.createElement('article');
       article.className = message.role === 'user' ? 'user' : 'assistant';
@@ -150,7 +151,7 @@
       }
       el('messages').append(article);
     }
-    if ((submission?.status === 'sending' || state.partialAnswer || state.paused) && !state.approvalRequest) {
+    if ((submission?.status === 'sending' || state.generatingInput || state.partialAnswer || state.paused) && !state.approvalRequest) {
       const waiting = document.createElement('article'); waiting.className = 'assistant response-waiting';
       const label = document.createElement('strong'); label.textContent = '都立AI';
       const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = state.paused ? '一時停止中 — 内容を変えずに送信すると再開します' : state.partialAnswer ? (state.displayMode === 'received' ? '回答を表示中（受信済み）…' : '生成中…') : '回答を待っています…';
@@ -180,6 +181,7 @@
       el('send').disabled = stopping;
     }
     if (state.paused && state.signedIn) el('send').disabled = false;
+    if (state.backgroundGeneration) el('send').disabled = true;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     el('plan-option').disabled = !state.signedIn;
     el('attach').disabled = !state.signedIn || reading;
@@ -416,6 +418,7 @@
   }
   el('form').addEventListener('submit', event => {
     event.preventDefault();
+    if (state.backgroundGeneration) return;
     if (state.signedIn && state.busy && !state.paused && !stopping && !state.browserMode && !state.changingModel && !reading) {
       if ((!prompt.value.trim() && !images.length) || (state.pendingPrompts?.length ?? 0) >= 10) return;
       vscode.postMessage({ type: 'queuePrompt', text: prompt.value, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
@@ -483,7 +486,7 @@
     if (state.paused && submission) { submission.status = 'paused'; restoreSubmission(); stopping = false; }
     else if (wasPaused && state.busy && submission) submission.status = 'sending';
     if (previousChatId !== state.activeChatId || !state.signedIn) filePreviewOpen.clear();
-    if (!state.signedIn || state.clearInput || (previousChatId !== state.activeChatId && !state.busy)) {
+    if (!state.signedIn || state.clearInput || (previousChatId !== state.activeChatId && (!state.busy || previousChatId))) {
       submission = undefined;
     } else if (submission && !state.busy && (submission.status === 'sending' || submission.status === 'stopping')) {
       submission.status = wasStopping ? 'stopped' : 'failed';
@@ -589,9 +592,9 @@
       const row = document.createElement('div'); row.className = 'history-row';
       const button = document.createElement('button');
       button.setAttribute('aria-current', String(chat.id === state.activeChatId));
-      button.className = 'recent-item'; button.disabled = state.busy;
+      button.className = 'recent-item'; button.disabled = !state.signedIn;
       const title = document.createElement('span'); title.className = 'recent-title'; title.textContent = chat.title;
-      const time = document.createElement('span'); time.className = 'recent-time'; time.textContent = age(chat.updatedAt);
+      const time = document.createElement('span'); time.className = 'recent-time'; time.textContent = chat.id === state.generatingChatId ? '生成中' : age(chat.updatedAt);
       button.append(title, time);
       button.addEventListener('click', () => vscode.postMessage({ type: 'select', id: chat.id }));
       const remove = document.createElement('button'); remove.className = 'text-button history-delete';
@@ -602,11 +605,12 @@
     }
     syncControls();
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
+    el('home').disabled = !state.signedIn;
     el('cancel').hidden = !state.busy || state.paused;
     el('cancel').title = state.canPause ? '一時停止して入力を編集' : '処理を停止';
     el('cancel').setAttribute('aria-label', el('cancel').title);
     el('send').hidden = state.busy && !state.paused && !!state.browserMode;
-    el('status').textContent = state.paused ? '一時停止中。送信で再開、内容を変更して送信すると考え直します。API側の処理は続く場合があります。' : stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
+    el('status').textContent = state.backgroundGeneration ? '別のチャットで生成中…' : state.paused ? '一時停止中。送信で再開、内容を変更して送信すると考え直します。API側の処理は続く場合があります。' : stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
     const approval = el('operation-approval');
     const request = state.approvalRequest;
     approval.hidden = !request;

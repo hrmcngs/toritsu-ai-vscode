@@ -102,8 +102,8 @@ export class ChatHistory {
 
   startNew(): void { this.activeId = undefined; }
 
-  replaceLastAnswer(answer: string): void {
-    const chat = this.conversations.find(item => item.id === this.activeId);
+  replaceLastAnswer(answer: string, id = this.activeId): void {
+    const chat = this.conversations.find(item => item.id === id);
     const last = chat?.messages.at(-1);
     if (last?.role !== 'assistant') return;
     last.content = answer.length <= 20000 ? answer : answer.slice(0, 19985) + '\n[履歴の文字数上限で省略]';
@@ -114,11 +114,22 @@ export class ChatHistory {
   }
 
   append(question: string, answer: string, inputText?: string): void {
+    this.appendTo(this.ensureActive(question), question, answer, inputText);
+  }
+
+  ensureActive(question: string): string {
     let chat = this.conversations.find(item => item.id === this.activeId);
     if (!chat) {
       chat = { id: randomUUID(), title: question.replace(/\s+/g, ' ').slice(0, 80), updatedAt: Date.now(), messages: [] };
       this.activeId = chat.id;
+      this.conversations.unshift(chat);
     }
+    return chat.id;
+  }
+
+  appendTo(id: string, question: string, answer: string, inputText?: string): void {
+    const chat = this.conversations.find(item => item.id === id);
+    if (!chat) throw new Error('生成先のチャットが見つかりません。');
     const bounded = (text: string) => text.length <= 20000 ? text : text.slice(0, 19985) + '\n[履歴の文字数上限で省略]';
     chat.messages.push({ role: 'user', content: bounded(question), ...(inputText !== undefined ? { inputText: bounded(inputText) } : {}) }, { role: 'assistant', content: bounded(answer) });
     chat.messages = chat.messages.slice(-20);

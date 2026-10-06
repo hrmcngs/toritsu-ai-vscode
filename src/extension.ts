@@ -92,7 +92,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ['toritsuAI.signOut', () => auth.signOut()],
     ['toritsuAI.openChat', showChat]
   ];
-  context.subscriptions.push(chat, vscode.window.registerWebviewViewProvider('toritsuAI.chat', chat));
+  context.subscriptions.push(chat, vscode.window.registerWebviewViewProvider('toritsuAI.chat', chat, { webviewOptions: { retainContextWhenHidden: true } }));
   for (const [id, action] of commands) {
     context.subscriptions.push(vscode.commands.registerCommand(id, async (sourceControl?: unknown) => {
       try { await action(sourceControl); }

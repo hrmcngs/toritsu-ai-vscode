@@ -45,6 +45,42 @@ test('生成を止めずにモデルと次回のプランモードを変更で�
   assert.match(state().messages[0].content, /プランモード/);
 });
 
+test('生成中に履歴・別チャットを表示しても元のチャットへ回答を保存する', async t => {
+  let finish;
+  const { provider, state } = setup(t, async () => new Promise(resolve => { finish = resolve; }));
+  provider.history.append('old question', 'old answer');
+  const oldId = provider.history.selectedId;
+  provider.history.startNew();
+  const active = provider.receive({ type: 'send', text: 'new question' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  const generatingId = state().generatingChatId;
+  await provider.receive({ type: 'home' });
+  assert.equal(state().showingHistory, true); assert.equal(state().busy, true);
+  assert.equal(state().generatingInput, 'new question');
+  await provider.receive({ type: 'select', id: oldId });
+  assert.equal(state().backgroundGeneration, true);
+  assert.equal(state().partialAnswer, ''); assert.equal(state().generatingInput, undefined);
+  assert.equal(state().messages[1].content, 'old answer');
+  finish('new answer'); await active;
+  assert.equal(state().activeChatId, oldId);
+  assert.equal(state().messages[1].content, 'old answer');
+  await provider.receive({ type: 'select', id: generatingId });
+  assert.equal(state().messages[0].content, 'new question');
+  assert.equal(state().messages[1].content, 'new answer');
+});
+
+test('履歴画面を開いたまま生成が完了しても履歴表示を維持する', async t => {
+  let finish;
+  const { provider, state } = setup(t, async () => new Promise(resolve => { finish = resolve; }));
+  const active = provider.receive({ type: 'send', text: 'question' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  provider.showHistory();
+  finish('answer'); await active;
+  assert.equal(state().showingHistory, true);
+  assert.equal(state().messages[1].content, 'answer');
+  assert.equal(state().busy, false);
+});
+
 test('読込だけではAIに送信せず、明示的な送信時に本文を渡して成功後に消去', async t => {
   const requests = [];
   const { provider, state } = setup(t, async messages => { requests.push(messages); return '作成したコード'; });
