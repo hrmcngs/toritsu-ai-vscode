@@ -161,7 +161,15 @@
             "pytest"
           ],
           "scope": "machine",
-          "description": "都立AIから実行を要求できるCLI名。PATH上のコマンドを使用し、実行前に毎回確認します。空配列でコマンド実行を無効にします。"
+          "description": "都立AIから実行を要求できるCLI名。PATH上のコマンドを使用し、外部操作の自動承認がオフの場合は実行前に確認します。空配列でコマンド実行を無効にします。"
+        },
+        "toritsuAI.autoExternalAutoApproval": {
+          "type": "boolean", "default": false, "scope": "machine",
+          "description": "自動承認モードで外部コマンド・GitHub・ブラウザ操作の確認を省略します。"
+        },
+        "toritsuAI.fullExternalAutoApproval": {
+          "type": "boolean", "default": false, "scope": "machine",
+          "description": "フルアクセスモードで外部コマンド・GitHub・ブラウザ操作の確認を省略します。"
         },
         "toritsuAI.approvalMode": {
           "type": "string",
@@ -175,7 +183,7 @@
           "enumDescriptions": [
             "API送信・ファイル作成・編集の前に確認",
             "API送信・指定先へのファイル作成・既存ファイル編集は自動。ワークスペース外の選択編集は確認",
-            "API送信・ファイル作成・編集の確認を省略"
+            "ワークスペース外の指定ファイルも読み書き可能。OS権限は変更しません"
           ],
           "description": "API送信・新規ファイル作成・指定先の既存ファイルの編集・選択編集の承認設定。"
         },

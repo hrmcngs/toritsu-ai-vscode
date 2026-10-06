@@ -16,10 +16,69 @@ Module._load = function(name, ...args) {
   } };
   return original.call(this, name, ...args);
 };
-const { parseExternalActions, externalActionLoop, executeExternalAction } = require('../dist/services/externalActions');
+const { parseExternalActions, externalActionLoop, executeExternalAction, compactGitActionRequest } = require('../dist/services/externalActions');
 Module._load = original;
 const block = actions => '```toritsu-actions\n' + JSON.stringify({ actions }) + '\n```';
 const action = { tool: 'open_url', url: 'https://example.com/' };
+test('Git result follow-up omits large source attachments and retains actual success and rejection details', () => {
+  const messages = [
+    { role: 'system', content: 'instructions' },
+    { role: 'user', content: JSON.stringify({ instruction: 'push to my-project-ai', files: [{ text: 'x'.repeat(28000) }] }) },
+    { role: 'assistant', content: block([{ tool: 'run_command', command: 'git', args: ['push'] }]) },
+    { role: 'user', content: JSON.stringify({ instruction: 'result', results: [{ tool: 'run_command', command: 'git', result: {
+      executed: true, success: false, exitCode: 1, stdout: 'x'.repeat(20000), stderr: 'non-fast-forward'
+    } }] }) }
+  ];
+  const compact = compactGitActionRequest(messages);
+  assert.ok(JSON.stringify(compact).length < 6000);
+  assert.equal(compact[1].content, 'push to my-project-ai');
+  const result = JSON.parse(compact.at(-1).content).results[0].result;
+  assert.equal(result.success, false); assert.equal(result.exitCode, 1);
+  assert.equal(result.stderr, 'non-fast-forward'); assert.match(result.stdout, /省略/);
+  messages.push({ role: 'assistant', content: 'next' }, messages.at(-1));
+  assert.equal(compactGitActionRequest(messages)[1].content, 'push to my-project-ai');
+});
+
+test('file read follow-up keeps exact source text rather than applying Git compaction', () => {
+  const messages = [{ role: 'user', content: JSON.stringify({ results: [{ tool: 'file.read', result: { text: 'x'.repeat(10000) } }] }) }];
+  assert.equal(compactGitActionRequest(messages), messages);
+});
+
+test('AI follow-up failure preserves command outcome and never retries push', async () => {
+  let executions = 0;
+  await assert.rejects(externalActionLoop([], block([{ tool: 'run_command', command: 'git', args: ['push', '-u', 'origin', 'HEAD'] }]),
+    async () => { throw new Error('APIエラー (HTTP 400)'); }, async () => {
+      executions++; return { executed: true, success: true, exitCode: 0, stderr: 'branch set up to track origin/main' };
+    }), error => {
+      assert.match(error.message, /外部操作後/);
+      assert.match(error.message, /"success":true/);
+      assert.match(error.message, /HTTP 400/);
+      return true;
+    });
+  assert.equal(executions, 1);
+});
+test('absolute file tools require full access and read outside the workspace', async t => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'toritsu-full-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'example.txt'); await fs.writeFile(file, 'outside content');
+  const read = { tool: 'file.read', path: file };
+  assert.deepEqual(parseExternalActions(block([read])), [read]);
+  assert.throws(() => parseExternalActions(block([{ ...read, path: 'relative.txt' }])));
+  await assert.rejects(executeExternalAction(read, { mode: 'auto' }, {}), /フルアクセス/);
+  const result = await executeExternalAction(read, { mode: 'full' }, {});
+  assert.equal(result.files[0].text, 'outside content');
+  const write = { tool: 'file.write', path: file, content: 'new', original: 'stale' };
+  await assert.rejects(executeExternalAction(write, { mode: 'full' }, {}), /読み直して/);
+  const generated = require('../dist/services/generatedFiles');
+  t.mock.method(generated, 'createGeneratedFiles', async (files, _signal, current, destination, _approval, sources) => {
+    assert.equal(destination, root); assert.equal(current(), true);
+    assert.equal(files[0].path, 'example.txt'); assert.equal(sources[0].text, 'outside content');
+    return 'saved';
+  });
+  assert.equal((await executeExternalAction({ ...write, original: 'outside content' }, { mode: 'full' }, {})).message, 'saved');
+});
 test('unsupported tools and unsafe URLs are rejected', () => {
   assert.deepEqual(parseExternalActions(block([action])), [action]);
   for (const url of ['file:///tmp/x', 'javascript:alert(1)', 'http://example.com', 'https://user:secret@example.com']) assert.throws(() => parseExternalActions(block([{ ...action, url }])));

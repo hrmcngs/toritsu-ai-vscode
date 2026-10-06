@@ -31,10 +31,21 @@ export class ApprovalService {
     return value === 'auto' || value === 'full' ? value : 'ask';
   }
 
+  get externalAutoApproval(): boolean {
+    return this.mode !== 'ask' && vscode.workspace.getConfiguration('toritsuAI').get<boolean>(this.mode === 'full' ? 'fullExternalAutoApproval' : 'autoExternalAutoApproval', false) === true;
+  }
+
+  async setExternalAutoApproval(value: unknown): Promise<void> {
+    if (typeof value !== 'boolean' || this.mode === 'ask') return;
+    const key = this.mode === 'full' ? 'fullExternalAutoApproval' : 'autoExternalAutoApproval';
+    if (value && !this.externalAutoApproval && !await this.confirm({ title: '外部操作を自動承認', detail: '許可されたコマンド、GitHubへのpush・リポジトリ作成、リモート変更、外部ブラウザなどを確認なしで実行します。ファイルの変更や外部への情報送信が発生します。' }, '自動承認する')) return;
+    await vscode.workspace.getConfiguration('toritsuAI').update(key, value, vscode.ConfigurationTarget.Global);
+  }
+
   async setMode(value: unknown): Promise<void> {
     if (value !== 'ask' && value !== 'auto' && value !== 'full') throw new Error('不正な承認モードです。');
     if (value === 'full' && this.mode !== 'full') {
-      if (!await this.confirm({ title: 'フルアクセスに変更', detail: 'API送信・新規ファイル作成・選択編集・外部ブラウザを開く操作の確認を省略します。指定先の既存ファイルの編集にも適用します。シェル実行は対象外です。' }, '確認なしにする')) return;
+      if (!await this.confirm({ title: 'フルアクセスに変更', detail: 'ワークスペース外を含む指定パスのファイル読み書きとAPI送信を許可します。OSのアクセス権限は変更しません。外部操作の自動承認は別のオプションです。' }, '確認なしにする')) return;
     }
     await vscode.workspace.getConfiguration('toritsuAI').update('approvalMode', value, vscode.ConfigurationTarget.Global);
   }
@@ -49,7 +60,7 @@ export class ApprovalService {
   }
 
   async approveLinks(urls: readonly string[], signal?: AbortSignal): Promise<void> {
-    if (this.mode === 'ask') {
+    if (!this.externalAutoApproval) {
       if (!await this.confirm({ title: 'リンク先の資料を読み込む', detail: urls.join('\n') }, '読み込む', signal)) throw new Error('リンクの読み込みをキャンセルしました。');
     }
     if (signal?.aborted) throw new Error('リンクの読み込みをキャンセルしました。');
@@ -57,15 +68,25 @@ export class ApprovalService {
 
   async approveOpenUrl(url: string, signal?: AbortSignal): Promise<boolean> {
     if (signal?.aborted) return false;
-    if (this.mode === 'full') return true;
+    if (this.externalAutoApproval) return true;
     return this.confirm({ title: '外部ブラウザを開く', detail: url }, '開く', signal);
   }
 
   async approveCommand(command: string, args: readonly string[], cwd: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (this.externalAutoApproval) return true;
     return this.confirm({ title: '外部コマンドを実行', detail: `実行先: ${cwd}\nコマンド: ${command}\n引数: ${JSON.stringify(args)}\n出力を都立AIへ送信します。ファイルの変更や外部サービスへの操作が含まれる場合があります。` }, '実行する', signal);
   }
 
+  async approveGitOperation(title: string, detail: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (this.externalAutoApproval) return true;
+    return this.confirm({ title, detail }, '実行する', signal);
+  }
+
   async approveRepository(options: { name: string; private: boolean; autoInit?: boolean; description?: string }, cwd: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (this.externalAutoApproval) return true;
     return this.confirm({ title: 'GitHubリポジトリを作成', detail: `名前: ${options.name}\n公開範囲: ${options.private ? '非公開 (private)' : '公開 (public)'}\nREADME初期化: ${options.autoInit ? 'あり' : 'なし'}\n説明: ${options.description ?? ''}\n実行先: ${cwd}\nGitHub CLIで認証済みの個人アカウントに作成します。結果を都立AIへ送信します。` }, '作成する', signal);
   }
 

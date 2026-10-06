@@ -63,8 +63,8 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <p class="approval-heading">都立AIの操作をどのように承認しますか？</p>
 <button type="button" role="menuitemradio" aria-checked="false" data-mode="ask"><span class="mode-title">毎回確認<span class="mode-check">✓</span></span><small>API送信・ファイル作成・既存ファイル編集の前に確認します</small></button>
 <button type="button" role="menuitemradio" aria-checked="true" data-mode="auto"><span class="mode-title">自動承認<span class="mode-check">✓</span></span><small>API送信・指定先へのファイル作成・編集は自動。ワークスペース外の選択編集を確認します</small></button>
-<button type="button" role="menuitemradio" aria-checked="false" data-mode="full" class="full-access"><span class="mode-title">フルアクセス<span class="mode-check">✓</span></span><small>API送信・ファイル作成・編集の確認を省略します</small></button>
-<p class="approval-note">指定した保存先へフォルダー・ファイルを作成できます。保存先内の既存ファイルも、手動添付なしで読み込んで編集できます。シェル実行は未対応です。</p></div></div></div>
+<button type="button" role="menuitemradio" aria-checked="false" data-mode="full" class="full-access"><span class="mode-title">フルアクセス<span class="mode-check">✓</span></span><small>ワークスペース外の指定ファイルにもアクセスできます</small></button>
+<label id="external-approval-option"><input id="external-auto-approval" type="checkbox">外部操作を自動承認</label></div></div></div>
 <label hidden class="context-label" title="現在のファイル全文・言語・パス・選択範囲を送信">
 <input id="context" type="checkbox" disabled>ファイルを添付</label>
 <div class="send-tools"><div class="model-control">

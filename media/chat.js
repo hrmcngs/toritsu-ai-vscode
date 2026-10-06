@@ -106,6 +106,9 @@
     appendText(text.slice(cursor));
   }
   function restoreSubmission() {
+    if (submission?.images?.length && !images.length && !reading) {
+      images = [...submission.images]; renderImages();
+    }
     if (submission && !prompt.value) {
       prompt.value = submission.input;
       prompt.setSelectionRange(prompt.value.length, prompt.value.length);
@@ -168,15 +171,16 @@
   const totalLimit = 10 * 1024 * 1024;
   function syncControls() {
     const disabled = !state.signedIn || state.busy || state.changingModel || reading;
-    for (const id of ['send', 'attach', 'prompt', 'context', 'load-links']) el(id).disabled = disabled;
+    for (const id of ['send', 'attach', 'context', 'load-links']) el(id).disabled = disabled;
+    prompt.disabled = !state.signedIn;
     if (state.signedIn && !state.changingModel && !reading && !state.browserMode) {
-      prompt.disabled = false;
       el('send').disabled = stopping;
     }
-    if ((stopping || state.paused) && state.signedIn) prompt.disabled = false;
     if (state.paused && state.signedIn) el('send').disabled = false;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
-    for (const button of el('attachments').querySelectorAll('button')) button.disabled = state.busy || reading;
+    el('plan-option').disabled = !state.signedIn;
+    el('attach').disabled = !state.signedIn || reading;
+    for (const button of el('attachments').querySelectorAll('button')) button.disabled = !state.signedIn || reading;
   }
   function renderPromptQueue() {
     const items = state.pendingPrompts ?? [];
@@ -206,6 +210,7 @@
         row.append(input, send, remove);
       }
       if (document.activeElement !== row.children[0]) row.children[0].value = item.text;
+      row.children[0].title = item.imageNames?.length ? `添付: ${item.imageNames.join('、')}` : '';
       existing.delete(item.id);
       const position = items.indexOf(item);
       if (container.children[position] !== row) container.insertBefore(row, container.children[position] ?? null);
@@ -221,14 +226,14 @@
       const caption = document.createElement('figcaption'); caption.textContent = image.name; caption.title = image.name;
       const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×';
       remove.setAttribute('aria-label', `${image.name}を削除`);
-      remove.addEventListener('click', () => { if (state.busy || reading) return; images.splice(index, 1); renderImages(); });
+      remove.addEventListener('click', () => { if (!state.signedIn || reading) return; images.splice(index, 1); renderImages(); });
       figure.append(preview, caption, remove); el('attachments').append(figure);
     });
     syncControls();
   }
   function resetImages() { attachmentGeneration++; images = []; renderImages(); }
   async function addFiles(files) {
-    if (!state.signedIn || state.busy || reading) return;
+    if (!state.signedIn || reading) { el('error').textContent = reading ? '画像を読み込み中です。少し待ってから追加してください。' : 'APIキーを登録してから画像を添付してください。'; return; }
     reading = true; syncControls();
     const generation = attachmentGeneration;
     try {
@@ -236,7 +241,8 @@
       if (images.length + files.length > 4) throw new Error('画像は4枚まで添付できます。');
       let total = images.reduce((sum, image) => sum + image.size, 0);
       for (const file of files) {
-        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('PNG・JPEG・WebP画像を添付してください。');
+        const type = file.type || ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' })[file.name?.split('.').pop()?.toLowerCase()];
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(type)) throw new Error('PNG・JPEG・WebP画像を添付してください。');
         if (!file.size || file.size > imageLimit) throw new Error('画像は1枚5MBまでです。');
         total += file.size;
         if (total > totalLimit) throw new Error('添付画像の合計は10MBまでです。');
@@ -244,11 +250,11 @@
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
           reader.onerror = () => reject(new Error('画像を読み込めませんでした。'));
-          reader.readAsDataURL(file);
+          reader.readAsDataURL(file.type ? file : file.slice(0, file.size, type));
         });
         added.push({ name: file.name || '画像.png', dataUrl, size: file.size });
       }
-      if (generation === attachmentGeneration && state.signedIn && !state.busy) {
+      if (generation === attachmentGeneration && state.signedIn) {
         images.push(...added); el('error').textContent = ''; renderImages();
       }
     } catch (error) {
@@ -275,7 +281,7 @@
   });
   for (const button of el('add-menu').querySelectorAll('[data-add]')) {
     button.addEventListener('click', () => {
-      if (!state.signedIn || state.busy || reading) return;
+      if (!state.signedIn || reading || (state.busy && button.dataset.add !== 'planMode')) return;
       closeAddMenu();
       const action = button.dataset.add;
       if (action === 'image') el('image-picker').click();
@@ -327,12 +333,19 @@
   el('image-picker').addEventListener('change', event => { void addFiles([...event.target.files]); event.target.value = ''; });
   window.addEventListener('dragover', event => {
     event.preventDefault();
-    if (state.signedIn && !state.busy && !reading) el('form').classList.add('drag-over');
+    if (event.dataTransfer) event.dataTransfer.dropEffect = state.signedIn && !reading ? 'copy' : 'none';
+    if (state.signedIn && !reading) el('form').classList.add('drag-over');
   });
   window.addEventListener('dragleave', event => { if (!event.relatedTarget) el('form').classList.remove('drag-over'); });
   window.addEventListener('drop', event => {
     event.preventDefault(); el('form').classList.remove('drag-over');
-    void addFiles([...event.dataTransfer.files]);
+    const transfer = event.dataTransfer;
+    const files = [...(transfer?.files ?? [])];
+    if (!files.length) for (const item of transfer?.items ?? []) {
+      if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
+    }
+    if (!files.length) { el('error').textContent = '画像ファイルを取得できませんでした。画像をPCに保存してドロップするか、画像選択から添付してください。'; return; }
+    void addFiles(files);
   });
   window.addEventListener('paste', event => {
     const files = [...(event.clipboardData?.files ?? [])];
@@ -352,6 +365,7 @@
     if (!el('model-menu').hidden) el('model-options').querySelector('button')?.focus();
   });
   el('custom-model').addEventListener('click', () => selectModel('custom'));
+  el('external-auto-approval').addEventListener('change', event => vscode.postMessage({ type: 'externalAutoApproval', enabled: event.target.checked }));
   el('configure-models').addEventListener('click', () => { closeModelMenu(); vscode.postMessage({ type: 'configureModels' }); });
   document.addEventListener('click', event => { if (!event.target.closest('.model-control')) closeModelMenu(); });
   el('model-menu').addEventListener('keydown', event => {
@@ -400,9 +414,9 @@
   el('form').addEventListener('submit', event => {
     event.preventDefault();
     if (state.signedIn && state.busy && !state.paused && !stopping && !state.browserMode && !state.changingModel && !reading) {
-      if (!prompt.value.trim() || (state.pendingPrompts?.length ?? 0) >= 10) return;
-      vscode.postMessage({ type: 'queuePrompt', text: prompt.value });
-      prompt.value = ''; draftDuringGeneration = false; inputHistory.reset(); resizePrompt(); prompt.focus();
+      if ((!prompt.value.trim() && !images.length) || (state.pendingPrompts?.length ?? 0) >= 10) return;
+      vscode.postMessage({ type: 'queuePrompt', text: prompt.value, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
+      prompt.value = ''; resetImages(); draftDuringGeneration = false; inputHistory.reset(); resizePrompt(); prompt.focus();
       return;
     }
     if (!state.signedIn || (state.busy && !state.paused) || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
@@ -415,7 +429,7 @@
     const request = { type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) };
     if (!state.browserMode) {
       const attachments = [...images.map(image => image.name), ...(state.files ?? []).map(file => file.name)];
-      submission = { input: prompt.value, text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
+      submission = { input: prompt.value, images: [...images], text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
       prompt.value = '';
       resizePrompt();
       renderMessages();
@@ -423,6 +437,7 @@
       el('status').textContent = '質問を送信しています…';
     }
     vscode.postMessage(request);
+    if (!state.browserMode) resetImages();
   });
   prompt.addEventListener('keydown', event => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -523,23 +538,25 @@
       card.append(summary, url, preview, remove); el('sources').append(card);
     }
     el('approval-label').textContent = modes[state.approvalMode] || modes.ask;
-    el('approval-toggle').disabled = state.busy;
+    el('external-approval-option').hidden = state.approvalMode === 'ask';
+    el('external-auto-approval').checked = !!state.externalAutoApproval;
+    el('approval-toggle').disabled = !state.signedIn;
     for (const button of el('approval-menu').querySelectorAll('[data-mode]')) {
       button.setAttribute('aria-checked', String(button.dataset.mode === state.approvalMode));
-      button.disabled = state.busy;
+      button.disabled = !state.signedIn;
     }
     el('account').textContent = state.account;
     el('account').title = state.account;
     el('model').textContent = state.browserMode ? 'ブラウザで選択' : state.changingModel ? 'モデルを確認中…' : `${state.modelSelection.label} ⌄`;
     el('model').title = state.modelSelection.description || state.model || 'モデルを選択';
     el('model-description').textContent = state.modelSelection.description || '';
-    el('model').disabled = state.browserMode || state.busy || state.changingModel;
+    el('model').disabled = state.browserMode || state.changingModel || !state.signedIn;
     el('model-options').replaceChildren();
     for (const option of state.modelSelection.options) {
       const button = document.createElement('button');
       button.type = 'button'; button.setAttribute('role', 'menuitemradio');
       button.setAttribute('aria-checked', String(option.selected));
-      button.disabled = state.busy || state.changingModel;
+      button.disabled = !state.signedIn || state.changingModel;
       const label = document.createElement('span'); label.className = 'model-title';
       label.textContent = option.label + (option.selected ? ' ✓' : '');
       const detail = document.createElement('small');
@@ -548,7 +565,7 @@
       el('model-options').append(button);
     }
     for (const id of ['custom-model', 'configure-models']) {
-      el(id).disabled = state.busy || state.changingModel;
+      el(id).disabled = !state.signedIn || state.changingModel;
       el(id).hidden = !!state.modelSelection.serverManaged;
     }
     el('login').hidden = state.signedIn;
@@ -621,7 +638,9 @@
     el('error').textContent = state.error;
     if (!state.signedIn || (state.clearInput && !wasStopping)) {
       if (!state.signedIn || !state.preserveDraft || !draftDuringGeneration) { prompt.value = ''; draftDuringGeneration = false; }
-      context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false;
+      context.checked = false;
+      if (!state.signedIn || !state.preserveDraft) resetImages();
+      inputHistory.reset(); pendingSubmission = false;
     }
     if ((state.clearInput || wasStopping) && state.signedIn && !state.busy) prompt.focus();
     renderMessages();

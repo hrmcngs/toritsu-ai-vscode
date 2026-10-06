@@ -7,7 +7,10 @@ const { PromptHistory } = require('../media/promptHistory');
 
 function ui() {
   class Element {
-    value = ''; checked = false; disabled = false; hidden = true;
+    value = ''; checked = false; hidden = true;
+    disabledWrites = []; _disabled = false;
+    get disabled() { return this._disabled; }
+    set disabled(value) { this.disabledWrites.push(value); this._disabled = value; if (value) this.focused = false; }
     style = {}; scrollHeight = 60; scrollTop = 0; clientHeight = 60;
     selectionStart = 0; selectionEnd = 0; dataset = {}; children = []; listeners = {};
     classList = { add() {}, remove() {} };
@@ -33,6 +36,9 @@ function ui() {
   const nodes = new Map(); const events = {}; const sent = [];
   const el = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const sandbox = vm.createContext({
+    FileReader: class {
+      readAsDataURL(file) { this.result = `data:${file.type};base64,aW1hZ2U=`; this.onload(); }
+    },
     acquireVsCodeApi: () => ({ setState() {}, postMessage: message => sent.push(message) }),
     document: { getElementById: el, createElement: () => new Element(), addEventListener() {} },
     window: { addEventListener: (name, listener) => { events[name] = listener; } }
@@ -42,8 +48,66 @@ function ui() {
     modelSelection: { label: 'test', options: [] }, sources: [], files: [], error: '', account: 'test', activeChatId: 'one' };
   const publish = changes => events.message({ data: { ...base, ...changes } });
   publish({});
-  return { el, sent, publish, message: data => events.message({ data }) };
+  return { el, sent, publish, message: data => events.message({ data }), dispatch: (name, data) => events[name]({ preventDefault() {}, ...data }) };
 }
+
+test('生成中にMIMEが空の画像をドロップし、次の待機送信に添付できる', async () => {
+  const { el, sent, publish, dispatch } = ui();
+  publish({ busy: true });
+  const file = { name: 'photo.PNG', type: '', size: 10, slice: (_start, _end, type) => ({ type }) };
+  dispatch('drop', { dataTransfer: { files: [file] } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(el('attachments').children.length, 1);
+  el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'queuePrompt');
+  assert.equal(sent.at(-1).images[0].name, 'photo.PNG');
+  assert.match(sent.at(-1).images[0].dataUrl, /^data:image\/png;/);
+  assert.equal(el('attachments').children.length, 0);
+});
+
+test('drop itemsから画像を取り込み、前の生成完了でも次の画像を残す', async () => {
+  const { el, publish, dispatch } = ui();
+  publish({ busy: true });
+  dispatch('drop', { dataTransfer: { files: [], items: [{ kind: 'file', getAsFile: () => ({ name: 'photo.png', type: 'image/png', size: 10 }) }] } });
+  await new Promise(resolve => setImmediate(resolve));
+  publish({ clearInput: true, preserveDraft: true });
+  assert.equal(el('attachments').children.length, 1);
+  el('attachments').children[0].children[2].emit('click');
+  assert.equal(el('attachments').children.length, 0);
+});
+
+test('画像ファイルがないドロップは理由を表示する', () => {
+  const { el, dispatch } = ui();
+  dispatch('drop', { dataTransfer: { files: [], items: [] } });
+  assert.match(el('error').textContent, /画像ファイルを取得できません/);
+});
+
+test('生成中もモデル・承認・プランの設定を操作できる', () => {
+  const { el, publish, sent } = ui();
+  publish({ busy: true, approvalMode: 'full', externalAutoApproval: true,
+    modelSelection: { label: '高速', options: [{ id: 'reasoning', label: '推論' }] } });
+  assert.equal(el('model').disabled, false);
+  assert.equal(el('approval-toggle').disabled, false);
+  assert.equal(el('plan-option').disabled, false);
+  el('model-options').children[0].emit('click');
+  assert.equal(sent.at(-1).type, 'selectModel');
+  assert.equal(sent.at(-1).id, 'reasoning');
+  assert.equal(el('external-auto-approval').checked, true);
+  el('external-auto-approval').emit('change', { target: { checked: false } });
+  assert.equal(sent.at(-1).type, 'externalAutoApproval');
+  assert.equal(sent.at(-1).enabled, false);
+});
+
+test('画像送信に失敗した場合、次の添付がなければ元の画像を戻す', async () => {
+  const { el, publish, dispatch } = ui();
+  dispatch('drop', { dataTransfer: { files: [{ name: 'photo.png', type: 'image/png', size: 10 }] } });
+  await new Promise(resolve => setImmediate(resolve));
+  el('form').emit('submit');
+  assert.equal(el('attachments').children.length, 0);
+  publish({ busy: true });
+  publish({ error: 'API failure' });
+  assert.equal(el('attachments').children.length, 1);
+});
 
 test('上で質問を遡り、下で元の下書きへ戻る。複数行の通常移動と選択は維持', () => {
   const history = new PromptHistory(); history.set(['first', 'second\nline']);
@@ -137,6 +201,22 @@ test('生成中の入力は待機し、完了しても入力途中の下書き�
   publish({ busy: true, clearInput: true, preserveDraft: true });
   assert.equal(el('prompt').value, 'まだ編集中');
   publish({ signedIn: false, clearInput: true }); assert.equal(el('prompt').value, '');
+});
+
+test('生成中の状態更新で入力欄を一瞬も無効化せずフォーカスを保つ', () => {
+  const { el, publish } = ui(); const input = el('prompt');
+  input.value = 'first'; el('form').emit('submit');
+  input.focus(); input.disabledWrites = [];
+  for (const partialAnswer of ['a', 'ab', 'abc']) {
+    input.value = '次の入力';
+    publish({ busy: true, partialAnswer });
+    assert.equal(input.focused, true); assert.equal(input.disabled, false);
+    assert.equal(input.value, '次の入力');
+  }
+  assert.equal(input.disabledWrites.includes(true), false);
+  publish({ busy: true, changingModel: true }); assert.equal(input.disabled, false);
+  publish({ busy: true, browserMode: true }); assert.equal(input.disabled, false);
+  publish({ signedIn: false }); assert.equal(input.disabled, true);
 });
 
 test('待機文の編集・次に送る矢印・削除は対象IDと本文を送る', () => {

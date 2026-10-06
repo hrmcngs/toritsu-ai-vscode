@@ -57,6 +57,9 @@ button:disabled { opacity: .4; cursor: default; }
 .approval-menu { position: absolute; left: 0; bottom: calc(100% + 8px); width: min(470px, 100%); max-height: min(420px, 65vh); overflow-y: auto; z-index: 10; border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border)); background: var(--vscode-menu-background, var(--vscode-editor-background)); border-radius: 16px; padding: 12px 8px; box-shadow: 0 8px 24px #0005; }
 .approval-heading, .approval-note { margin: 4px 12px 10px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.5; }
 .approval-note { margin: 10px 12px 2px; font-size: 11px; }
+#external-approval-option { display: flex; align-items: center; gap: 8px; padding: 12px; border-top: 1px solid var(--vscode-panel-border); }
+#external-approval-option[hidden] { display: none; }
+#external-auto-approval { accent-color: var(--vscode-focusBorder); }
 .approval-menu [role=menuitemradio] { display: block; width: 100%; background: transparent; padding: 10px 12px; text-align: left; border-radius: 8px; }
 .approval-menu [role=menuitemradio]:hover { background: var(--vscode-list-hoverBackground); }
 .mode-title { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }

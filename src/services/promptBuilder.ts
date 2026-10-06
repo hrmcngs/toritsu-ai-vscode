@@ -4,9 +4,12 @@ import { TextAttachment } from './fileAttachments';
 import { A1Mode } from '../types/a1';
 import { DEFAULT_ALLOWED_COMMANDS } from './commandPolicy';
 
-export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; outputDirectory?: string; mode?: A1Mode; allowedCommands?: readonly string[] }
+export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; fullAccess?: boolean; outputDirectory?: string; mode?: A1Mode; allowedCommands?: readonly string[] }
 
-const ACTION_INSTRUCTIONS = '外部操作は単一のtoritsu-actionsブロックでJSON {"actions":[...]}。tool: open_url（ブラウザ）/read_public_url（公開本文）はurlにHTTPS URL、run_commandはcommandに許可CLI、argsに引数配列、cwdにワークスペース内の絶対パス（省略可）。承認後に実行、最大3件×3ラウンド。結果前に成功と主張しない。認証情報の出力・対話ログイン・クリック不可。ファイル保存とテスト・commit/pushは別の依頼で行う。';
+const ACTION_INSTRUCTIONS = '外部操作は単一のtoritsu-actionsブロックでJSON {"actions":[...]}。tool: open_url（ブラウザ）/read_public_url（公開本文）はurlにHTTPS URL、run_commandはcommandに許可CLI、argsに引数配列、cwdにワークスペース内の絶対パス（省略可）。承認設定に従い実行、最大3件×3ラウンド。結果前に成功と主張しない。認証情報の出力・対話ログイン・クリック不可。ファイル保存とテスト・commit/pushは別の依頼で行う。';
+const FULL_ACCESS_INSTRUCTIONS = 'フルアクセスではcwdはワークスペース外も可。file.readはpathに絶対パス、file.writeはpath・content（完全な本文）・original（既存ファイルの元の全文）を指定。指定場所のファイルを読み書きできる。既存ファイルは読み直してから編集し、秘密情報を読み取らない。';
+const GIT_INSTRUCTIONS = 'ソース管理操作を依頼されたら手順案内だけで終わらず実行を要求する。まず{"tool":"git.status"}で状態と差分を取得。変更があれば{"tool":"git.commitAndPush","args":{"message":"差分に基づく要約","stageAll":true}}で全変更のステージ・入力欄への反映・コミット・pushを承認付きで行う。ステージ済みだけならstageAll:false。既存コミットのpushだけなら{"tool":"git.push"}。cwdで対象リポジトリの絶対パスを指定可。拒否・失敗を成功扱いしない。';
+const REMOTE_INSTRUCTIONS = '依頼の送信先とremoteが違う場合、URLが明示済みなら{"tool":"git.setRemote","args":{"name":"origin","url":"https://github.com/OWNER/REPO.git"}}で確認付き変更後にpush。候補説明だけで止めない。送信先不明なら質問。push失敗は返されたGitの詳細エラーと送信先を示し、原因を憶測で断定しない。';
 
 function modeHistory(history: readonly Message[], mode?: A1Mode): readonly Message[] {
   if (!mode) return history;
@@ -72,7 +75,7 @@ export function chatPrompt(history: readonly Message[], text: string, context?: 
   const content = context || sources.length || options.files?.length || options.goal || options.outputDirectory ? JSON.stringify({ instruction: text, context, outputDirectory: options.outputDirectory, sources: sources.length ? sources : undefined,
     files: options.files?.map(({ name, path, text }) => ({ name, path, text })), goal: options.goal || undefined }) : text;
   return [
-    { role: 'system', content: CHAT_INSTRUCTIONS + (options.planMode ? '' : FILE_INSTRUCTIONS + ACTION_INSTRUCTIONS + `許可CLI: ${JSON.stringify(options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS)}。` +
+    { role: 'system', content: CHAT_INSTRUCTIONS + (options.planMode ? '' : FILE_INSTRUCTIONS + ACTION_INSTRUCTIONS + (options.fullAccess ? FULL_ACCESS_INSTRUCTIONS : '') + GIT_INSTRUCTIONS + REMOTE_INSTRUCTIONS + `許可CLI: ${JSON.stringify(options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS)}。` +
       ((options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS).includes('gh') ? 'リポジトリ作成は{"tool":"github.createRepo","args":{"name":"名前","private":true,"autoInit":true,"description":"説明（省略可）"}}を優先。個人アカウントに作成しURLを返す。remote設定は結果のURLで別のgit操作として承認を求める。' : '')) +
       (options.mode === 'fast' ? '回答は要点を簡潔に。必要なコードは省略しないでください。' : options.mode === 'reasoning' ? '複雑な変更では整合性・例外・検証方法を重視し、結論と根拠の要約を示してください。必要なコードは省略しないでください。' : '') },
     ...(options.planMode ? [{ role: 'system' as const, content: 'プランモードです。実装コードは生成せず、要件の整理、必要な確認事項、変更するファイル、実装手順と検証方法を提案してください。操作を実行したと主張しないでください。' }] : []),

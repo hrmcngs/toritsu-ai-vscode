@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { dirname } from 'node:path';
 import { BrowserHandoff, browserPrompt } from '../services/browserHandoff';
 import { LlmClient } from '../services/llmClient';
-import { Message } from '../types/ai';
+import { ImageAttachment, Message } from '../types/ai';
 import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
 import { ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from '../services/connectionSetup';
@@ -20,7 +20,7 @@ import { ApprovalService } from '../services/approvalService';
 import { validateImages } from '../services/imageAttachments';
 import { ModelSelection } from '../services/modelSelection';
 import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/linkReader';
-import { allowedCommands, executeExternalAction, externalActionLoop } from '../services/externalActions';
+import { allowedCommands, compactGitActionRequest, executeExternalAction, externalActionLoop } from '../services/externalActions';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>;
@@ -45,7 +45,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private viewSubscriptions: vscode.Disposable[] = [];
   private generation?: { gate: PauseGate; input: string; signature: string; sessionKey: string };
   private queuedSend?: unknown;
-  private pendingPrompts: { id: string; text: string; editing: boolean }[] = [];
+  private pendingPrompts: { id: string; text: string; editing: boolean; images: ImageAttachment[] }[] = [];
   private promptSequence = 0;
   private dispatchingPrompt = false;
   private partialAnswer = '';
@@ -131,26 +131,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       signedIn: !!session, account: session?.accountLabel ?? '',
       model: vscode.workspace.getConfiguration('toritsuAI').get<string>('model', ''),
       approvalMode: this.approvals.mode,
+      externalAutoApproval: this.approvals.externalAutoApproval,
       modelSelection: this.models.state, changingModel: this.changingModel,
       sources: session ? this.sources : [], loadingLinks: this.loadingLinks,
       files: session ? this.files : [], loadingFiles: this.loadingFiles,
       generationPath: session ? this.generationPath : '',
       goal: session ? this.goal : '', planMode: this.planMode, notice: this.notice,
-      pendingPrompts: session ? this.pendingPrompts : [],
+      pendingPrompts: session ? this.pendingPrompts.map(({ images, ...item }) => ({ ...item, imageNames: images.map(image => image.name) })) : [],
       error: this.error, clearInput, preserveDraft
     });
   }
 
   private async receive(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown; editing?: unknown };
+    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown; editing?: unknown; enabled?: unknown };
     if (message.type === 'ready') { this.publish(); return; }
     if (message.type === 'queuePrompt' || message.type === 'editQueuedPrompt' || message.type === 'removeQueuedPrompt' || message.type === 'runQueuedPrompt') {
       if (!this.auth.session || this.browser?.enabled) return;
       if (message.type === 'queuePrompt') {
-        if (typeof message.text !== 'string' || !message.text.trim()) return;
+        if (typeof message.text !== 'string') return;
+        let images: ImageAttachment[];
+        try { images = validateImages(message.images); }
+        catch (error) { this.error = errorMessage(error); this.publish(); return; }
+        if (!message.text.trim() && !images.length) return;
         if (this.pendingPrompts.length >= 10) { this.error = '待機できるプロンプトは10件までです。'; this.publish(); return; }
-        this.pendingPrompts.push({ id: String(++this.promptSequence), text: message.text, editing: false });
+        this.pendingPrompts.push({ id: String(++this.promptSequence), text: message.text.trim() || '添付画像について説明してください。', editing: false, images });
       } else {
         const index = this.pendingPrompts.findIndex(item => item.id === message.id);
         if (index < 0) return;
@@ -196,9 +201,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return;
       }
       if (message.type === 'selectModel') {
-        if (this.controller || this.changingModel) return;
+        if (this.changingModel) return;
         await this.auth.requireSession();
-        if (this.controller || this.changingModel) return;
+        if (this.changingModel) return;
         this.modelController = new AbortController();
         this.changingModel = true; this.error = ''; this.publish();
         try { await this.models.select(message.id, this.modelController.signal); }
@@ -210,7 +215,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return;
       }
       if (message.type === 'approvalMode') {
-        if (!this.controller) await this.approvals.setMode(message.mode);
+        await this.approvals.setMode(message.mode);
+        return;
+      }
+      if (message.type === 'externalAutoApproval') {
+        await this.approvals.setExternalAutoApproval(message.enabled);
         return;
       }
       if (message.type === 'login') {
@@ -228,6 +237,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (choice === '接続設定を始める') await vscode.commands.executeCommand('toritsuAI.setupConnection');
         if (choice === 'APIキーを設定') await vscode.commands.executeCommand('toritsuAI.setApiKey');
         if (choice === '詳細なAPI設定') await vscode.commands.executeCommand('workbench.action.openSettings', 'toritsuAI');
+        return;
+      }
+      if (message.type === 'planMode') {
+        await this.auth.requireSession();
+        this.planMode = !this.planMode;
         return;
       }
       if (this.controller) return;
@@ -275,11 +289,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           this.generationPath = value.trim() ? normalizeDestinationPath(value, workspacePath) : '';
           this.notice = this.generationPath ? `生成先: ${this.generationPath}` : '生成先のパス指定を解除しました。';
         }
-        return;
-      }
-      if (message.type === 'planMode') {
-        await this.auth.requireSession();
-        if (!this.controller) this.planMode = !this.planMode;
         return;
       }
       if (message.type === 'goal') {
@@ -387,8 +396,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           }
           return;
         }
+        const planMode = this.planMode;
         const folders = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file') ?? [];
-        if (!this.planMode && !this.generationPath && !context && !this.files.length && isCodingRequest(text) && folders.length === 1) {
+        if (!planMode && !this.generationPath && !context && !this.files.length && isCodingRequest(text) && folders.length === 1) {
           this.files = await codingContext(folders[0].uri.fsPath, editor?.document.uri.scheme === 'file' ? editor.document.uri.fsPath : undefined, controller.signal);
           if (controller.signal.aborted || this.auth.session?.key !== session.key) throw new Error('処理をキャンセルしました。');
           this.notice = this.files.length ? `編集対象として読み込みました: ${this.files.map(file => file.name).join(', ')}` : '編集対象を特定できませんでした。対象ファイルを開くか「＋」から選択してください。';
@@ -397,7 +407,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const editSources = this.files.map(file => ({ path: file.path, text: file.text }));
         if (context && editor?.document.uri.scheme === 'file') editSources.push({ path: editor.document.uri.fsPath, text: context.fullText });
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
-        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory, mode: this.models.state.mode, allowedCommands: allowedCommands() });
+        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode, fullAccess: this.approvals.mode === 'full', outputDirectory, mode: this.models.state.mode, allowedCommands: allowedCommands() });
         let lastPublish = 0;
         let received = '';
         const showDelta = (delta: string) => {
@@ -428,11 +438,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           return answer;
         };
         const initialAnswer = await receiveAnswer(request);
-        const answer = this.planMode ? initialAnswer : await externalActionLoop(request, initialAnswer, receiveAnswer, async action => {
+        const answer = planMode ? initialAnswer : await externalActionLoop(request, initialAnswer,
+          messages => receiveAnswer(this.models.state.serverManaged ? compactGitActionRequest(messages) : messages), async action => {
           await gate.wait(controller.signal);
           if (this.auth.session?.key !== session.key) throw new Error('接続先が変わりました。');
-          this.notice = action.tool === 'github.createRepo' ? `GitHubリポジトリを作成: ${action.args.name}`
+          this.notice = action.tool === 'git.status' || action.tool === 'git.push' || action.tool === 'git.commitAndPush' || action.tool === 'git.setRemote' ? `ソース管理を操作: ${action.tool}`
+            : action.tool === 'github.createRepo' ? `GitHubリポジトリを作成: ${action.args.name}`
             : action.tool === 'run_command' ? `コマンドを実行: ${action.command} ${JSON.stringify(action.args)}`
+            : action.tool === 'file.read' || action.tool === 'file.write' ? `ファイル操作: ${action.path}`
             : `${action.tool === 'open_url' ? 'ブラウザを開く' : '公開ページを読み込む'}: ${action.url}`;
           this.publish();
           return executeExternalAction(action, this.approvals, this.linkReader, controller.signal);
@@ -444,14 +457,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const sourceNote = this.sources.length ? `\n\n[参考資料: ${this.sources.map(source => source.url).join(', ')}。本文はこの送信のみに含まれます]` : '';
         this.showingHistory = false;
         const fileNote = this.files.length ? `\n\n[添付ファイル: ${this.files.map(file => file.name).join(', ')}。本文はこの送信のみ]` : '';
-        const optionsNote = `${this.goal ? `\n[目標: ${this.goal}]` : ''}${this.planMode ? '\n[プランモード]' : ''}`;
+        const optionsNote = `${this.goal ? `\n[目標: ${this.goal}]` : ''}${planMode ? '\n[プランモード]' : ''}`;
         this.generation = undefined;
         this.partialAnswer = '';
         this.history.append(historyText + sourceNote + fileNote + optionsNote, answer, message.text);
         this.sources = []; this.files = []; this.notice = '';
         this.publish(true, true);
         await this.history.save();
-        if (!this.planMode) {
+        if (!planMode) {
           const generated = parseGeneratedFiles(answer);
           if (generated.length) {
             try {
@@ -496,7 +509,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (item.editing || !item.text.trim()) break;
         this.pendingPrompts.shift();
         void this.view?.webview.postMessage({ type: 'queuedPromptStarted', id: item.id, text: item.text });
-        await this.receive({ type: 'send', text: item.text, includeContext: false, images: [] });
+        await this.receive({ type: 'send', text: item.text, includeContext: false, images: item.images });
       }
     } finally { this.dispatchingPrompt = false; this.publish(); }
   }

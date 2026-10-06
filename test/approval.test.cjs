@@ -8,12 +8,13 @@ let mode = 'auto';
 let choice;
 let prompts = 0;
 let folder;
+const externalOptions = { autoExternalAutoApproval: false, fullExternalAutoApproval: false };
 const original = Module._load;
 Module._load = function (name, ...args) {
   if (name === 'vscode') return {
     ConfigurationTarget: { Global: 1 },
     workspace: {
-      getConfiguration: () => ({ get: key => key === 'approvalMode' ? mode : 'https://example.com', update: async (_key, value) => { mode = value; } }),
+      getConfiguration: () => ({ get: key => key === 'approvalMode' ? mode : key in externalOptions ? externalOptions[key] : 'https://example.com', update: async (key, value) => { if (key === 'approvalMode') mode = value; else externalOptions[key] = value; } }),
       getWorkspaceFolder: () => folder
     },
     window: {
@@ -25,6 +26,25 @@ Module._load = function (name, ...args) {
 };
 const { ApprovalService, ApprovedClient } = require('../dist/services/approvalService');
 Module._load = original;
+
+test('外部操作の自動承認はモードごとに独立し、毎回確認では無効', async () => {
+  const approvals = new ApprovalService();
+  mode = 'auto'; choice = undefined; prompts = 0;
+  assert.equal(await approvals.approveCommand('git', ['push'], '/project'), false);
+  await approvals.setExternalAutoApproval(true);
+  assert.equal(approvals.externalAutoApproval, false);
+  choice = '自動承認する'; await approvals.setExternalAutoApproval(true);
+  const count = prompts;
+  assert.equal(await approvals.approveCommand('git', ['push'], '/project'), true);
+  assert.equal(await approvals.approveGitOperation('push', 'origin'), true);
+  assert.equal(await approvals.approveOpenUrl('https://example.com'), true);
+  assert.equal(prompts, count);
+  mode = 'full'; assert.equal(approvals.externalAutoApproval, false);
+  mode = 'ask'; assert.equal(approvals.externalAutoApproval, false);
+  mode = 'auto'; await approvals.setExternalAutoApproval(false);
+  const controller = new AbortController(); controller.abort();
+  assert.equal(await approvals.approveCommand('git', [], '/project', controller.signal), false);
+});
 
 test('毎回確認で拒否すると通信しない。承認後だけ通信する', async () => {
   mode = 'ask'; choice = undefined; prompts = 0; let calls = 0;

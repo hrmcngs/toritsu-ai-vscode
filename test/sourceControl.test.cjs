@@ -17,6 +17,7 @@ Module._load = function(name, ...args) {
   return original.call(this, name, ...args);
 };
 const { generateCommitMessage, commitAndPush } = require('../dist/commands/sourceControl');
+const { executeGitChatAction, validateGitRemote } = require('../dist/services/gitChatTools');
 Module._load = original;
 function setup() {
   decision = 'コミットしてpush'; onConfirm = undefined;
@@ -28,6 +29,9 @@ function setup() {
       HEAD: { name: 'main', commit: 'old', upstream: { remote: 'origin', name: 'main' } }, remotes: [{ name: 'origin', pushUrl: 'https://github.com/example/repo.git' }] },
     status: async () => {}, diff: async staged => { calls.push(['diff', staged]); return 'patch'; },
     commit: async (message, options) => { calls.push(['commit', message, options]); },
+    add: async paths => { calls.push(['add', paths]); },
+    setConfig: async (key, value) => { calls.push(['config', key, value]); return ''; },
+    addRemote: async (name, url) => { calls.push(['remote', name, url]); },
     push: async (...args) => { calls.push(['push', ...args]); }
   };
   repositories = [repository]; return { repository, calls, uri };
@@ -80,4 +84,56 @@ test('new branch sets upstream and push failures report the completed commit', a
   await assert.rejects(commitAndPush(), /コミットは完了.*pushに失敗/);
   assert.deepEqual(calls.at(-1), ['push', 'origin', 'main', true]);
   assert.equal(calls.filter(call => call[0] === 'commit').length, 1);
+});
+
+test('chat tool stages, writes SCM message, commits and pushes after approval', async () => {
+  const { repository, calls, uri } = setup();
+  repository.state.workingTreeChanges = [{ uri: uri('/repo/b.ts') }];
+  const result = await executeGitChatAction({ tool: 'git.commitAndPush', args: { message: 'AI summary', stageAll: true } }, {
+    approveGitOperation: async (_title, detail) => {
+      assert.equal(repository.inputBox.value, 'AI summary'); assert.match(detail, /b.ts/);
+      assert.equal(calls.some(call => call[0] === 'commit'), false); return true;
+    }
+  });
+  assert.equal(result.pushed, true); assert.equal(result.committed, true);
+  assert.deepEqual(calls.filter(call => ['add', 'commit', 'push'].includes(call[0])), [
+    ['add', ['/repo/a.ts', '/repo/b.ts']], ['commit', 'AI summary', { postCommitCommand: null }], ['push', 'origin', 'main', false]
+  ]);
+});
+test('chat push-only never stages or commits and denial executes nothing', async () => {
+  const { calls } = setup();
+  const denied = await executeGitChatAction({ tool: 'git.push' }, { approveGitOperation: async () => false });
+  assert.equal(denied.executed, false); assert.equal(calls.some(call => ['add', 'commit', 'push'].includes(call[0])), false);
+  const result = await executeGitChatAction({ tool: 'git.push' }, { approveGitOperation: async () => true });
+  assert.equal(result.pushed, true); assert.equal(result.committed, false);
+  assert.deepEqual(calls.filter(call => ['add', 'commit', 'push'].includes(call[0])), [['push', 'origin', 'main', false]]);
+});
+test('chat tool reports commit succeeded but push failed without claiming success', async () => {
+  const { repository } = setup(); repository.push = async () => { throw new Error('network'); };
+  const result = await executeGitChatAction({ tool: 'git.commitAndPush', args: { message: 'summary', stageAll: false } }, { approveGitOperation: async () => true });
+  assert.equal(result.committed, true); assert.equal(result.pushed, false); assert.match(result.error, /network/);
+});
+
+test('remote change shows both URLs and changes fetch and push only after approval', async () => {
+  const { calls } = setup(); const url = 'https://github.com/hrmcngs/my-project-ai.git';
+  const action = { tool: 'git.setRemote', args: { name: 'origin', url } };
+  const declined = await executeGitChatAction(action, { approveGitOperation: async () => false });
+  assert.equal(declined.executed, false); assert.equal(calls.some(call => call[0] === 'config'), false);
+  const result = await executeGitChatAction(action, { approveGitOperation: async (_title, detail) => {
+    assert.match(detail, /example\/repo/); assert.match(detail, /my-project-ai/); return true;
+  } });
+  assert.equal(result.configured, true); assert.equal(result.pushed, false);
+  assert.deepEqual(calls.filter(call => call[0] === 'config'), [['config', 'remote.origin.url', url], ['config', 'remote.origin.pushurl', url]]);
+});
+test('Git error details retain rejection reason while removing credentials', async () => {
+  const { repository } = setup();
+  repository.push = async () => { throw Object.assign(new Error('push failed'), {
+    stderr: 'non-fast-forward https://ghp_SECRET123@github.com/hrmcngs/test-folder.git', gitErrorCode: 'PushRejected'
+  }); };
+  const result = await executeGitChatAction({ tool: 'git.push' }, { approveGitOperation: async () => true });
+  assert.equal(result.pushed, false); assert.equal(result.code, 'PushRejected'); assert.match(result.error, /non-fast-forward/);
+  assert.doesNotMatch(result.error, /SECRET123/); assert.match(result.url, /example\/repo/);
+});
+test('remote validation rejects credentials and non-GitHub URLs', () => {
+  for (const url of ['file:///tmp/repo', 'https://secret@github.com/owner/repo', 'https://example.com/owner/repo']) assert.throws(() => validateGitRemote('origin', url));
 });

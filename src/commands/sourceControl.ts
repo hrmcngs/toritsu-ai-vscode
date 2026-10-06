@@ -14,12 +14,15 @@ export interface GitRepository {
   };
   status(): Promise<void>;
   diff(cached?: boolean): Promise<string>;
+  add(paths: string[]): Promise<void>;
+  addRemote(name: string, url: string): Promise<void>;
+  setConfig(key: string, value: string): Promise<string>;
   commit(message: string, options: { postCommitCommand: null }): Promise<void>;
   push(remote: string, branch: string, setUpstream: boolean): Promise<void>;
 }
 interface GitApi { repositories: GitRepository[]; getRepository(uri: vscode.Uri): GitRepository | null }
 
-async function selectRepository(sourceControl?: unknown): Promise<GitRepository | undefined> {
+export async function selectRepository(sourceControl?: unknown): Promise<GitRepository | undefined> {
   if (!vscode.workspace.isTrusted) throw new Error('信頼されたワークスペースで操作してください。');
   const extension = vscode.extensions.getExtension<{ getAPI(version: 1): GitApi }>('vscode.git');
   if (!extension) throw new Error('VS CodeのGit拡張を有効にしてください。');

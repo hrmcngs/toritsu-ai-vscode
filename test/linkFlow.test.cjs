@@ -29,6 +29,22 @@ function setup(t, complete, storage) {
   return { provider, state: () => state, logout: () => { auth.session = undefined; listener(); } };
 }
 
+test('生成を止めずにモデルと次回のプランモードを変更できる', async t => {
+  let finish;
+  let selected;
+  const { provider, state } = setup(t, async () => new Promise(resolve => { finish = resolve; }));
+  provider.models = { state: { label: 'test', options: [] }, select: async id => { selected = id; } };
+  provider.planMode = true;
+  const active = provider.receive({ type: 'send', text: 'first' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  await provider.receive({ type: 'selectModel', id: 'reasoning' });
+  assert.equal(selected, 'reasoning'); assert.equal(state().busy, true);
+  await provider.receive({ type: 'planMode' });
+  assert.equal(state().planMode, false);
+  finish('ok'); await active;
+  assert.match(state().messages[0].content, /プランモード/);
+});
+
 test('読込だけではAIに送信せず、明示的な送信時に本文を渡して成功後に消去', async t => {
   const requests = [];
   const { provider, state } = setup(t, async messages => { requests.push(messages); return '作成したコード'; });
@@ -66,6 +82,26 @@ test('実行中に次の依頼を待機し、編集済みの本文を完了後�
   assert.equal(requests.length, 1); assert.equal(state().pendingPrompts.length, 2);
   finish('ok'); await active;
   assert.deepEqual(requests, ['first', 'edited second', 'third']);
+  assert.deepEqual(state().pendingPrompts, []);
+});
+
+test('待機中の画像を保持し、前の生成後に画像付きで送信する', async t => {
+  let finish;
+  const requests = [];
+  const { provider, state } = setup(t, async messages => {
+    requests.push(messages.at(-1).content);
+    if (requests.length === 1) return new Promise(resolve => { finish = resolve; });
+    return 'ok';
+  });
+  const active = provider.receive({ type: 'send', text: 'first' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aU1sAAAAASUVORK5CYII=';
+  await provider.receive({ type: 'queuePrompt', text: '', images: [{ name: 'photo.png', dataUrl }] });
+  assert.deepEqual(state().pendingPrompts[0].imageNames, ['photo.png']);
+  assert.equal(state().pendingPrompts[0].images, undefined);
+  finish('ok'); await active;
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1][1].image_url.url, dataUrl);
   assert.deepEqual(state().pendingPrompts, []);
 });
 

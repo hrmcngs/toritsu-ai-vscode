@@ -73,7 +73,8 @@ test('授業用APIは会話履歴を含め、画像・不正な応答は明確�
 test('通常チャットの固定指示を簡潔に保ち、質問や添付本文は削らない', () => {
   const { chatPrompt } = require('../dist/services/promptBuilder');
   const short = chatPrompt([], 'こんにちは');
-  assert.ok(short[0].content.length < 900);
+  assert.ok(short[0].content.length < 1400);
+  assert.match(short[0].content, /git.commitAndPush/);
   assert.match(short[0].content, /toritsu-actions/);
   assert.match(short[0].content, /npm/);
   assert.match(chatPrompt([], 'test', undefined, [], [], { allowedCommands: ['custom-cli'] })[0].content, /許可CLI: \["custom-cli"\]/);
