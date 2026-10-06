@@ -5,7 +5,7 @@ import { LinkReader, normalizeLink } from './linkReader';
 import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, sep } from 'node:path';
-import { collectAttachments } from './fileAttachments';
+import { collectAttachments, readFolder } from './fileAttachments';
 import { createGeneratedFiles, ExistingFilesNeedEditing, parseGeneratedFiles } from './generatedFiles';
 import { DEFAULT_ALLOWED_COMMANDS, validCommandName } from './commandPolicy';
 import { executeGitChatAction, GitChatAction, validateGitRemote } from './gitChatTools';
@@ -63,6 +63,7 @@ export function compactGitActionRequest(messages: readonly Message[]): readonly 
 }
 export type ExternalAction = { tool: 'open_url' | 'read_public_url'; url: string }
   | { tool: 'file.read'; path: string }
+  | { tool: 'folder.read'; path: string }
   | { tool: 'file.write'; path: string; content: string; original?: string }
   | { tool: 'run_command'; command: string; args: string[]; cwd?: string }
   | { tool: 'github.createRepo'; args: RepositoryOptions; cwd?: string } | GitChatAction;
@@ -84,9 +85,9 @@ export function parseExternalActions(answer: string): ExternalAction[] {
   try { data = JSON.parse(blocks[0][1]); } catch { throw new Error('操作要求のJSONを読み取れませんでした。'); }
   if (!data || !Array.isArray(data.actions) || !data.actions.length || data.actions.length > 3) throw new Error('操作要求は1〜3件で指定してください。');
   return data.actions.map(value => {
-    if (value?.tool === 'file.read' || value?.tool === 'file.write') {
+    if (value?.tool === 'file.read' || value?.tool === 'file.write' || value?.tool === 'folder.read') {
       if (typeof value.path !== 'string' || !isAbsolute(value.path) || value.path.includes('\0')) throw new Error('ファイルは絶対パスで指定してください。');
-      if (value.tool === 'file.read') return { tool: 'file.read', path: value.path };
+      if (value.tool === 'file.read' || value.tool === 'folder.read') return { tool: value.tool, path: value.path };
       const [file] = parseGeneratedFiles('```toritsu-files\n' + JSON.stringify({ files: [{ path: basename(value.path), content: value.content, original: value.original }] }) + '\n```\n');
       return { tool: 'file.write', path: value.path, content: file.content, original: file.original };
     }
@@ -118,6 +119,19 @@ export function parseExternalActions(answer: string): ExternalAction[] {
 }
 export async function executeExternalAction(action: ExternalAction, approvals: ApprovalService, reader: LinkReader, signal?: AbortSignal): Promise<unknown> {
   if (signal?.aborted) throw new Error('操作をキャンセルしました。');
+  if (action.tool === 'folder.read') {
+    if (!vscode.workspace.isTrusted) throw new Error('フォルダー読み込みには信頼されたワークスペースが必要です。');
+    const path = await realpath(action.path);
+    let contained = false;
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      if (folder.uri.scheme !== 'file') continue;
+      const local = relative(await realpath(folder.uri.fsPath), path);
+      if (local !== '..' && !local.startsWith(`..${sep}`) && !isAbsolute(local)) contained = true;
+    }
+    if (!contained && approvals.mode !== 'full') throw new Error('ワークスペース外のフォルダーを読むにはフルアクセスに変更してください。');
+    if (!await approvals.approveFolderRead(path, signal)) return { read: false, reason: 'ユーザーが読み込みを許可しませんでした。' };
+    return readFolder(action.path, signal);
+  }
   if (action.tool === 'file.read' || action.tool === 'file.write') {
     if (approvals.mode !== 'full' || !vscode.workspace.isTrusted) throw new Error('絶対パスのファイル操作には信頼されたワークスペースとフルアクセスが必要です。');
     if (action.tool === 'file.read') return collectAttachments([action.path], signal);

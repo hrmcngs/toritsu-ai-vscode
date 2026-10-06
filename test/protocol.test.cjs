@@ -1,5 +1,22 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+
+test('長い回答の後のパス入力にも相談の目的と除外条件を引き継ぐ', () => {
+ const {chatPrompt}=require('../dist/services/promptBuilder');
+ const history=[
+  {role:'user',content:'小学生の天文観察会です。親も楽しめる企画にしたい。マイクラが好評。クイズは別の人が担当するので除外。'},
+  {role:'assistant',content:'長い提案'.repeat(1800)},
+  {role:'user',content:'クイズは棄却で'},
+  {role:'assistant',content:'マイクラを活用しましょう'}
+ ];
+ const prompt=chatPrompt(history,'/Users/example/前回利用したmod',undefined,[],[],{mode:'fast'});
+ assert.match(prompt[1].content,/小学生.*親.*クイズ.*除外/);
+ assert.match(prompt.map(message=>message.content).join('\n'),/クイズは棄却/);
+ assert.equal(prompt.at(-1).content,'/Users/example/前回利用したmod');
+ assert.match(prompt[0].content,/保存・編集の依頼と決めつけず/);
+ assert.doesNotMatch(prompt[0].content,/files\/contextがあればその実コードを修正/);
+ assert.equal(history.length,4);
+});
 const { ToritsuAiClient } = require('../dist/services/toritsuAiClient');
 const { extractCode } = require('../dist/utils/extractCode');
 const config = { baseUrl: 'https://gateway.example/api', model: 'example-model', chatEndpoint: '/chat', authHeader: 'X-API-Key', apiKeyPrefix: '' };
@@ -73,7 +90,7 @@ test('授業用APIは会話履歴を含め、画像・不正な応答は明確�
 test('通常チャットの固定指示を簡潔に保ち、質問や添付本文は削らない', () => {
   const { chatPrompt } = require('../dist/services/promptBuilder');
   const short = chatPrompt([], 'こんにちは');
-  assert.ok(short[0].content.length < 1400);
+  assert.ok(short[0].content.length < 1600);
   assert.match(short[0].content, /git.commitAndPush/);
   assert.match(short[0].content, /toritsu-actions/);
   assert.match(short[0].content, /npm/);
@@ -94,7 +111,7 @@ test('授業用の高速・推論は回答方針と履歴量を変更し最新�
  const context={filePath:'/index.html',language:'html',fullText:'<html>original</html>',selectedText:''};
  const fast=chatPrompt(history,'変更して',context,[],[],{mode:'fast'});
  const reasoning=chatPrompt(history,'変更して',context,[],[],{mode:'reasoning'});
- assert.equal(fast.length,4);assert.equal(reasoning.length,6);
+ assert.equal(fast.length,5);assert.equal(reasoning.length,6);
  assert.match(fast[0].content,/要点を簡潔/);assert.match(reasoning[0].content,/整合性・例外・検証/);
  assert.equal(fast.at(-1).content,reasoning.at(-1).content);
  assert.equal(history.length,4);

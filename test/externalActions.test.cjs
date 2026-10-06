@@ -20,6 +20,22 @@ const { parseExternalActions, externalActionLoop, executeExternalAction, compact
 Module._load = original;
 const block = actions => '```toritsu-actions\n' + JSON.stringify({ actions }) + '\n```';
 const action = { tool: 'open_url', url: 'https://example.com/' };
+test('folder.readは絶対パスだけを受け付ける', () => {
+  assert.deepEqual(parseExternalActions(block([{ tool: 'folder.read', path: '/tmp/mod' }])), [{ tool: 'folder.read', path: '/tmp/mod' }]);
+  assert.throws(() => parseExternalActions(block([{ tool: 'folder.read', path: '../mod' }])), /絶対パス/);
+});
+test('ワークスペース外のフォルダーはfull以外で拒否し、承認拒否後は読まない', async t => {
+  const fs = require('node:fs/promises');
+  const root = await fs.mkdtemp(require('node:path').join(require('node:os').tmpdir(), 'toritsu-folder-action-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let confirmations = 0;
+  const approvals = { mode: 'auto', approveFolderRead: async () => { confirmations++; return false; } };
+  await assert.rejects(executeExternalAction({ tool: 'folder.read', path: root }, approvals, {}), /フルアクセス/);
+  assert.equal(confirmations, 0);
+  approvals.mode = 'full';
+  const result = await executeExternalAction({ tool: 'folder.read', path: root }, approvals, {});
+  assert.equal(result.read, false); assert.equal(confirmations, 1);
+});
 test('自動デバッグは変更をコマンドより先に適用し結果を戻す', async () => {
   const events = [];
   const answer = await externalActionLoop([], block([action]), async messages => {

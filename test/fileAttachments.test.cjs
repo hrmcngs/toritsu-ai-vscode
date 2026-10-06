@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { collectAttachments } = require('../dist/services/fileAttachments');
+const { collectAttachments, readFolder } = require('../dist/services/fileAttachments');
 const { chatPrompt } = require('../dist/services/promptBuilder');
 
 async function fixture(t) {
@@ -11,6 +11,22 @@ async function fixture(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test('直接フォルダー読み込みは一覧と本文を返し秘密情報とリンクを除外する', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'README.md'), '月の重力を変えるmod');
+  await fs.writeFile(path.join(root, 'credentials.json'), 'SECRET');
+  await fs.writeFile(path.join(root, '.env'), 'SECRET');
+  await fs.writeFile(path.join(root, 'mod.jar'), Buffer.from([0, 1, 2]));
+  await fs.symlink(path.join(root, 'README.md'), path.join(root, 'linked.md'));
+  const result = await readFolder(root);
+  assert.deepEqual(result.entries.map(entry => entry.name).sort(), ['README.md', 'mod.jar']);
+  assert.equal(result.files.length, 1);
+  assert.match(result.files[0].text, /月/);
+  assert.ok(result.skipped >= 4);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(readFolder(root, controller.signal), /キャンセル/);
+});
 
 test('フォルダーのコードを取得し、隠しファイル・依存物・バイナリ・リンクを除外', async t => {
   const root = await fixture(t);

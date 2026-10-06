@@ -488,7 +488,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           this.notice = action.tool === 'git.status' || action.tool === 'git.push' || action.tool === 'git.commitAndPush' || action.tool === 'git.setRemote' ? `ソース管理を操作: ${action.tool}`
             : action.tool === 'github.createRepo' ? `GitHubリポジトリを作成: ${action.args.name}`
             : action.tool === 'run_command' ? `コマンドを実行: ${action.command} ${JSON.stringify(action.args)}`
-            : action.tool === 'file.read' || action.tool === 'file.write' ? `ファイル操作: ${action.path}`
+            : action.tool === 'file.read' || action.tool === 'file.write' || action.tool === 'folder.read' ? `ファイル操作: ${action.path}`
             : `${action.tool === 'open_url' ? 'ブラウザを開く' : '公開ページを読み込む'}: ${action.url}`;
           this.publish();
           return executeExternalAction(action, this.approvals, this.linkReader, controller.signal);

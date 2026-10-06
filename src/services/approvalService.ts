@@ -72,6 +72,12 @@ export class ApprovalService {
     return this.confirm({ title: '外部ブラウザを開く', detail: url }, '開く', signal);
   }
 
+  async approveFolderRead(path: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (this.externalAutoApproval) return true;
+    return this.confirm({ title: 'フォルダーを読み込む', detail: `${path}\nファイル一覧と最大20件・合計80,000文字の本文を都立AIへ送信します。隠しファイル・依存物・秘密情報らしい名前は除外しますが、通常のファイルにも機密情報が含まれる場合があります。` }, '読み込む', signal);
+  }
+
   async approveCommand(command: string, args: readonly string[], cwd: string, signal?: AbortSignal): Promise<boolean> {
     if (signal?.aborted) return false;
     if (this.externalAutoApproval) return true;

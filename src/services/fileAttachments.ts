@@ -7,6 +7,31 @@ export interface TextAttachment { id: string; name: string; path: string; text: 
 export const MAX_FILES = 20;
 export const MAX_FILE_CHARS = 80000;
 const SKIP = new Set(['node_modules', 'dist', 'build', 'coverage', 'vendor', '__pycache__']);
+function excludedEntry(name: string): boolean {
+  return name.startsWith('.') || SKIP.has(name) || /^(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(name) ||
+    /(^|[._-])(credentials?|secrets?|tokens?|passwords?)([._-]|$)|\.(pem|key|p12|pfx)$/i.test(name);
+}
+
+export async function readFolder(path: string, signal?: AbortSignal) {
+  if (signal?.aborted) throw new Error('フォルダーの読み込みをキャンセルしました。');
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('シンボリックリンクではないフォルダーを指定してください。');
+  const root = await realpath(path);
+  const entries: { name: string; type: string }[] = [];
+  let listingTruncated = false;
+  const directory = await opendir(root);
+  let scanned = 0;
+  for await (const entry of directory) {
+    if (signal?.aborted) throw new Error('フォルダーの読み込みをキャンセルしました。');
+    if (++scanned > 500 || entries.length >= 200) { listingTruncated = true; break; }
+    if (excludedEntry(entry.name) || entry.isSymbolicLink()) continue;
+    if (entry.isDirectory() || entry.isFile()) entries.push({ name: entry.name, type: entry.isDirectory() ? 'directory' : 'file' });
+  }
+  const result = await collectAttachments([root], signal);
+  return { path: root, entries, listingTruncated, ...result,
+    limits: { maxFiles: MAX_FILES, maxChars: MAX_FILE_CHARS, maxDepth: 5 },
+    note: '隠しファイル・秘密情報らしい名前・依存物・リンク・バイナリは除外。本文は上限付き。未取得ファイルの内容は不明。' };
+}
 
 /** Read only user-picked local paths. Bounded traversal; no symlinks or special files. */
 export async function collectAttachments(paths: readonly string[], signal?: AbortSignal): Promise<{ files: TextAttachment[]; skipped: number }> {
@@ -29,7 +54,7 @@ export async function collectAttachments(paths: readonly string[], signal?: Abor
       for await (const entry of directory) {
         check();
         if (visited >= 500 || files.length >= MAX_FILES) { skipped++; break; }
-        if (entry.name.startsWith('.') || SKIP.has(entry.name) || /^(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(entry.name)) { visited++; skipped++; continue; }
+        if (excludedEntry(entry.name)) { visited++; skipped++; continue; }
         await visit(join(canonical, entry.name), depth + 1);
       }
       return;
