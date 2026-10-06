@@ -117,6 +117,9 @@
       resizePrompt();
     }
   }
+  el('return-generation').addEventListener('click', () => {
+    if (state.generatingChatId) vscode.postMessage({ type: 'select', id: state.generatingChatId });
+  });
   function renderMessages() {
     const follow = el('content').scrollHeight - el('content').scrollTop - el('content').clientHeight < 100;
     el('messages').replaceChildren();
@@ -163,7 +166,7 @@
       }
       el('messages').append(waiting);
     }
-    if (submission || state.partialAnswer) {
+    if (!state.showingHistory && (submission || state.partialAnswer)) {
       el('welcome').hidden = true; el('messages').hidden = false; el('recent').hidden = true;
     }
     prompt.placeholder = state.busy && !state.paused && !state.browserMode ? '次の依頼を入力…' : defaultPlaceholder;
@@ -416,9 +419,19 @@
       vscode.postMessage({ type: action === 'cancel' && state.canPause ? 'pause' : action });
     });
   }
+  el('stop-generation').addEventListener('click', () => {
+    if (!state.busy) return;
+    stopping = true;
+    if (submission) submission.status = 'stopping';
+    restoreSubmission(); renderMessages(); syncControls();
+    vscode.postMessage({ type: 'cancel' });
+  });
   el('form').addEventListener('submit', event => {
     event.preventDefault();
     if (state.backgroundGeneration) return;
+    if (state.paused && !prompt.value.trim() && !images.length) {
+      vscode.postMessage({ type: 'resume' }); return;
+    }
     if (state.signedIn && state.busy && !state.paused && !stopping && !state.browserMode && !state.changingModel && !reading) {
       if ((!prompt.value.trim() && !images.length) || (state.pendingPrompts?.length ?? 0) >= 10) return;
       vscode.postMessage({ type: 'queuePrompt', text: prompt.value, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
@@ -483,8 +496,13 @@
     const previousChatId = state.activeChatId;
     const wasPaused = state.paused;
     state = event.data;
+    if (state.paused && state.pausedRequest && !submission) {
+      const request = state.pausedRequest;
+      submission = { input: request.text, text: request.text, status: 'paused', images: request.images.map(image => ({ ...image, size: Math.floor(image.dataUrl.split(',')[1].length * 3 / 4) })) };
+      context.checked = request.includeContext;
+    }
     if (state.paused && submission) { submission.status = 'paused'; restoreSubmission(); stopping = false; }
-    else if (wasPaused && state.busy && submission) submission.status = 'sending';
+    else if (wasPaused && state.busy && submission && !stopping) submission.status = 'sending';
     if (previousChatId !== state.activeChatId || !state.signedIn) filePreviewOpen.clear();
     if (!state.signedIn || state.clearInput || (previousChatId !== state.activeChatId && (!state.busy || previousChatId))) {
       submission = undefined;
@@ -582,9 +600,10 @@
     el('welcome-description').textContent = state.signedIn
       ? 'コードの説明、改善の相談、アイデアをここから。'
       : 'APIキーを登録して、コードの相談を始めましょう。Microsoftログインは不要です。';
-    el('welcome').hidden = state.messages.length > 0 || (state.signedIn && state.showingHistory);
+    const hasConversation = state.messages.length > 0 || !!submission || !!state.generatingInput || !!state.partialAnswer;
+    el('welcome').hidden = hasConversation || (state.signedIn && state.showingHistory);
     el('messages').hidden = state.showingHistory;
-    el('recent').hidden = !state.signedIn || (!state.showingHistory && (state.messages.length > 0 || !state.recent.length));
+    el('recent').hidden = !state.signedIn || (!state.showingHistory && (hasConversation || !state.recent.length));
     el('history-empty').hidden = state.recent.length > 0;
     el('clear').hidden = !state.recent.length;
     el('recent-list').replaceChildren();
@@ -606,7 +625,10 @@
     syncControls();
     for (const id of ['new', 'home', 'clear']) el(id).disabled = !state.signedIn || state.busy;
     el('home').disabled = !state.signedIn;
+    el('return-generation').hidden = !state.generatingChatId || (!state.showingHistory && !state.backgroundGeneration);
     el('cancel').hidden = !state.busy || state.paused;
+    el('stop-generation').hidden = !state.busy || !state.canPause && !state.paused;
+    el('stop-generation').disabled = stopping;
     el('cancel').title = state.canPause ? '一時停止して入力を編集' : '処理を停止';
     el('cancel').setAttribute('aria-label', el('cancel').title);
     el('send').hidden = state.busy && !state.paused && !!state.browserMode;
@@ -638,7 +660,7 @@
       }
       approval.append(actions); el('content').scrollTop = el('content').scrollHeight;
     } else if (!request) { approval.replaceChildren(); approval.dataset.requestId = ''; }
-    if (request) {
+    if (request && !state.showingHistory) {
       el('welcome').hidden = true; el('recent').hidden = true;
       el('status').textContent = '操作内容を確認して、許可または拒否を選んでください。';
     }

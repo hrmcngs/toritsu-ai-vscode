@@ -8,6 +8,16 @@
 
 ソース管理の「Changes」上部に都立AIのメッセージ生成（sparkle）と「コミットしてpush」（cloud-upload）を表示します。生成したメッセージは既存のコミット入力欄に入るため、そのまま編集できます。ステージ済みの変更を優先し、なければ作業中の変更から生成します。コミットしてpushする場合は対象を「＋」でステージし、送信先・メッセージ・ファイルを確認して実行します。push失敗時はコミットを残し、標準の「Push」で再試行できます。入力欄の中にあるCopilotの生成ボタンは置き換えません。通常版の公開拡張ポイントであるソース管理の上部から利用します。
 
+## VS Code Sessionsへの統合
+
+VS Codeの共通Sessions一覧に都立AIの履歴を表示し、新規セッションから同じ生成・外部ツールエンジンを利用できます。生成中・承認待ち・失敗状態を一覧に反映し、名前変更・削除に対応します。検索・日付別表示・ピン留めはVS Code側の機能を利用します。ネイティブ画面を閉じても生成は継続します。
+
+この連携は提案API `chatSessionsProvider` に依存します。対応するVS Codeで、`Preferences: Configure Runtime Arguments` の `enable-proposed-api` に `hrmcngs.toritsu-ai` を追加し、VS Code全体を再起動してください。`都立AI: Sessions連携を確認` で登録状況を確認できます。APIが未対応・未許可の場合も従来のサイドバーは利用できます。提案APIは変更される可能性があり、Marketplace向けの安定APIではありません。
+
+Sessionsの添付入力と複数セッションの同時生成にはまだ対応しません。画像やファイルの添付、モード設定は従来の都立AIサイドバーを利用してください。ネイティブからの操作承認はVS Codeの確認ダイアログで行います。
+
+公式資料: [提案APIの利用と有効化](https://code.visualstudio.com/api/advanced-topics/using-proposed-api)、[Sessions API定義](https://github.com/microsoft/vscode/blob/main/src/vscode-dts/vscode.proposed.chatSessionsProvider.d.ts)。
+
 ## 外部ツールの利用
 
 チャットのAI回答はMarkdown表示に対応します。見出し・太字・引用・箇条書き・番号付きリスト・表・インラインコードを整形し、生成途中と保存済み履歴にも適用します。コードブロックと生成ファイルは折りたたんで表示します。回答のコピーは元のMarkdownを保ちます。生HTMLは実行せず、画像URLは自動取得しません。

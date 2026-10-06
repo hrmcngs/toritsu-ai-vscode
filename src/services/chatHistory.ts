@@ -88,7 +88,11 @@ export class ChatHistory {
   }
 
   get messages(): readonly Message[] {
-    return (this.conversations.find(chat => chat.id === this.activeId)?.messages ?? []).map(({ role, content }) => ({ role, content }));
+    return this.messagesFor(this.activeId);
+  }
+
+  messagesFor(id: string | undefined): readonly Message[] {
+    return (this.conversations.find(chat => chat.id === id)?.messages ?? []).map(({ role, content }) => ({ role, content }));
   }
 
   get inputHistory(): string[] {
@@ -138,6 +142,13 @@ export class ChatHistory {
   }
 
   clear(): void { this.conversations = []; this.activeId = undefined; }
+
+  rename(id: string, title: string): void {
+    if (!title.trim() || title.trim().length > 80) throw new Error('セッション名は1〜80文字で指定してください。');
+    const chat = this.conversations.find(item => item.id === id);
+    if (!chat) throw new Error('セッションが見つかりません。');
+    chat.title = title.trim();
+  }
 
   remove(id: string): void {
     this.conversations = this.conversations.filter(chat => chat.id !== id);

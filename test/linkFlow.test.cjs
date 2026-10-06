@@ -81,6 +81,39 @@ test('履歴画面を開いたまま生成が完了しても履歴表示を維�
   assert.equal(state().busy, false);
 });
 
+test('native Sessions uses the same generation engine and reports failed responses', async t => {
+  const { provider } = setup(t, async () => '**native answer**');
+  const id = await provider.createNativeSession('native');
+  const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+  const updates = [];
+  await provider.sendNativeSession(id, 'native question', text => updates.push(text), token);
+  assert.equal(provider.sessionContent(id).messages[1].content, '**native answer**');
+  assert.equal(updates.at(-1), '**native answer**');
+  const failed = setup(t, async () => { throw new Error('API failure'); }).provider;
+  const failedId = await failed.createNativeSession('failure');
+  await assert.rejects(failed.sendNativeSession(failedId, 'question', () => {}, token), /API failure/);
+  assert.equal(failed.sessionContent(failedId).status, 'failed');
+});
+
+test('pause from history returns to the running chat, explicit resume does not resend, and cancel exits the pause gate', async t => {
+  let finish; let calls = 0;
+  const { provider, state } = setup(t, async () => { calls++; return new Promise(resolve => { finish = resolve; }); });
+  const active = provider.receive({ type: 'send', text: 'question', includeContext: false });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  provider.showHistory();
+  await provider.receive({ type: 'pause' });
+  assert.equal(state().showingHistory, false);
+  assert.equal(state().pausedRequest.text, 'question');
+  await provider.receive({ type: 'resume' });
+  assert.equal(state().paused, false); assert.equal(calls, 1);
+  await provider.receive({ type: 'pause' });
+  await provider.receive({ type: 'cancel' });
+  assert.equal(state().paused, false);
+  await provider.receive({ type: 'resume' });
+  finish('late answer'); await active;
+  assert.equal(state().busy, false); assert.equal(state().messages.length, 0);
+});
+
 test('読込だけではAIに送信せず、明示的な送信時に本文を渡して成功後に消去', async t => {
   const requests = [];
   const { provider, state } = setup(t, async messages => { requests.push(messages); return '作成したコード'; });

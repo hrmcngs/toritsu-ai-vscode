@@ -4,7 +4,7 @@ import { TextAttachment } from './fileAttachments';
 import { A1Mode } from '../types/a1';
 import { DEFAULT_ALLOWED_COMMANDS } from './commandPolicy';
 
-export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; fullAccess?: boolean; outputDirectory?: string; mode?: A1Mode; allowedCommands?: readonly string[] }
+export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; fullAccess?: boolean; outputDirectory?: string; mode?: A1Mode; allowedCommands?: readonly string[]; autoDebug?: boolean }
 
 const ACTION_INSTRUCTIONS = '外部操作は単一のtoritsu-actionsブロックでJSON {"actions":[...]}。tool: open_url（ブラウザ）/read_public_url（公開本文）はurlにHTTPS URL、run_commandはcommandに許可CLI、argsに引数配列、cwdにワークスペース内の絶対パス（省略可）。承認設定に従い実行、最大3件×3ラウンド。結果前に成功と主張しない。認証情報の出力・対話ログイン・クリック不可。ファイル保存とテスト・commit/pushは別の依頼で行う。';
 const FULL_ACCESS_INSTRUCTIONS = 'フルアクセスではcwdはワークスペース外も可。file.readはpathに絶対パス、file.writeはpath・content（完全な本文）・original（既存ファイルの元の全文）を指定。指定場所のファイルを読み書きできる。既存ファイルは読み直してから編集し、秘密情報を読み取らない。';
@@ -79,6 +79,7 @@ export function chatPrompt(history: readonly Message[], text: string, context?: 
       ((options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS).includes('gh') ? 'リポジトリ作成は{"tool":"github.createRepo","args":{"name":"名前","private":true,"autoInit":true,"description":"説明（省略可）"}}を優先。個人アカウントに作成しURLを返す。remote設定は結果のURLで別のgit操作として承認を求める。' : '')) +
       (options.mode === 'fast' ? '回答は要点を簡潔に。必要なコードは省略しないでください。' : options.mode === 'reasoning' ? '複雑な変更では整合性・例外・検証方法を重視し、結論と根拠の要約を示してください。必要なコードは省略しないでください。' : '') },
     ...(options.planMode ? [{ role: 'system' as const, content: 'プランモードです。実装コードは生成せず、要件の整理、必要な確認事項、変更するファイル、実装手順と検証方法を提案してください。操作を実行したと主張しないでください。' }] : []),
+    ...(options.autoDebug && !options.planMode ? [{ role: 'system' as const, content: '自動デバッグです。通常の「ファイル保存とテストは別依頼」をこの依頼では解除します。最大6ラウンド。プロジェクトの既存テストで不具合を再現し、結果を分析して必要最小限の修正と再テストを繰り返してください。toritsu-filesは同じ回答のコマンドより先に承認設定に従い適用されます。既存ファイルのoriginalは直近の実際の全文と一致させてください。成功・拒否・失敗の結果を確認し、拒否された変更を前提にテストしないでください。テスト成功を捏造せず未検証は明記。commit・push・デプロイ・依存追加はユーザーの別の明示的依頼なしに実行しないでください。' }] : []),
     ...modeHistory(history, options.mode),
     { role: 'user', content: images.length ? [
       { type: 'text', text: content },

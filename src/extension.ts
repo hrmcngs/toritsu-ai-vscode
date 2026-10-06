@@ -14,8 +14,9 @@ import { errorMessage, runRequest } from './utils/runRequest';
 import { AuthService } from './services/authService';
 import { AuthenticatedClient } from './services/authenticatedClient';
 import { ApprovalService, ApprovedClient } from './services/approvalService';
+import { nativeSessionId, registerNativeSessions } from './providers/nativeSessions';
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<{ sessionsIntegrationStatus(): string }> {
   await configureDefaultConnection();
   const auth = new AuthService(context.secrets);
   context.subscriptions.push(auth);
@@ -52,6 +53,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
   const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
+  const nativeSessions = registerNativeSessions(chat);
+  context.subscriptions.push(nativeSessions);
   const showChat = () => openChat(() => chat.openFallbackPanel());
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
@@ -59,6 +62,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await action();
   };
   const commands: [string, (sourceControl?: unknown) => Promise<void>][] = [
+    ['toritsuAI.autoDebug', () => authorized(async () => {
+      const text = await vscode.window.showInputBox({ title: '都立AI: 自動デバッグ', prompt: '再現したい不具合・期待する動作・テスト方法', ignoreFocusOut: true });
+      if (!text?.trim()) return;
+      await showChat();
+      await chat.startAutomaticDebug(text.trim());
+    })],
+    ['toritsuAI.checkSessionsIntegration', async () => { await vscode.window.showInformationMessage(`都立AI: ${nativeSessions.status}`); }],
+    ['toritsuAI.renameSession', value => authorized(() => chat.renameNativeSession(nativeSessionId(value)))],
+    ['toritsuAI.deleteSession', value => authorized(() => chat.deleteNativeSession(nativeSessionId(value)))],
     ['toritsuAI.generateCommitMessage', sourceControl => authorized(() => generateCommitMessage(client, sourceControl))],
     ['toritsuAI.commitAndPush', commitAndPush],
     ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(undefined, true); await auth.restore(); await models.select('custom'); }],
@@ -104,4 +116,5 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }));
   }
+  return { sessionsIntegrationStatus: () => nativeSessions.status };
 }

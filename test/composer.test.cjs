@@ -55,6 +55,27 @@ function ui() {
   return { el, sent, publish, message: data => events.message({ data }), dispatch: (name, data) => events[name]({ preventDefault() {}, ...data }) };
 }
 
+test('生成の更新で履歴を隠さず、元のチャットへ戻って待機送信できる', () => {
+  const { el, sent, publish } = ui();
+  const recent = [{ id: 'one', title: '生成中の会話', updatedAt: Date.now() }];
+  publish({ busy: true, generatingChatId: 'one', generatingInput: '質問', recent });
+  for (const partialAnswer of ['', '途中の回答', '追加の回答']) {
+    publish({ busy: true, showingHistory: true, generatingChatId: 'one', generatingInput: '質問', partialAnswer, recent });
+    assert.equal(el('recent').hidden, false);
+    assert.equal(el('messages').hidden, true);
+    assert.equal(el('prompt').disabled, false);
+  }
+  assert.equal(el('return-generation').hidden, false);
+  el('return-generation').emit('click');
+  assert.equal(sent.at(-1).type, 'select');
+  assert.equal(sent.at(-1).id, 'one');
+  publish({ busy: true, generatingChatId: 'one', generatingInput: '質問', recent });
+  el('prompt').value = '次の依頼'; el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'queuePrompt');
+  publish({ busy: true, activeChatId: 'two', backgroundGeneration: true, generatingChatId: 'one', recent });
+  assert.equal(el('return-generation').hidden, false);
+});
+
 test('生成中にMIMEが空の画像をドロップし、次の待機送信に添付できる', async () => {
   const { el, sent, publish, dispatch } = ui();
   publish({ busy: true });
@@ -84,6 +105,20 @@ test('画像ファイルがないドロップは理由を表示する', () => {
   const { el, dispatch } = ui();
   dispatch('drop', { dataTransfer: { files: [], items: [] } });
   assert.match(el('error').textContent, /画像ファイルを取得できません/);
+});
+
+test('一時停止の再表示で質問を復元し、履歴と歓迎画面を重ねず、完全停止できる', () => {
+  const { el, publish, sent } = ui();
+  publish({ busy: true, paused: true, canPause: true, generatingInput: '元の質問', pausedRequest: { text: '元の質問', includeContext: false, images: [] },
+    recent: [{ id: 'one', title: '履歴', updatedAt: Date.now() }] });
+  assert.equal(el('prompt').value, '元の質問');
+  assert.equal(el('recent').hidden, true); assert.equal(el('welcome').hidden, true);
+  assert.equal(el('stop-generation').hidden, false);
+  el('prompt').value = ''; el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'resume');
+  el('stop-generation').emit('click'); assert.equal(sent.at(-1).type, 'cancel');
+  publish({ busy: true, paused: false }); publish({ busy: false });
+  assert.equal(el('stop-generation').hidden, true);
 });
 
 test('生成中に履歴を開けて、再表示時にも送信済みの質問と待機表示が残る', () => {

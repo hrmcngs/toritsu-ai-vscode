@@ -32,7 +32,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <section id="operation-approval" class="operation-approval" aria-label="操作の確認" aria-live="polite" hidden></section>
 </main>
 <button id="latest" type="button" class="latest-button" aria-label="最新の回答へ移動" hidden>↓ 最新へ</button>
-<footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
+<footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><button id="return-generation" type="button" class="text-button" hidden>生成中のチャットに戻る</button><p id="status" role="status"></p><p id="error" role="alert"></p>
 <section id="prompt-queue" class="prompt-queue" aria-label="待機中のプロンプト" hidden><div class="queue-heading">待機中<span id="queue-count"></span></div><div id="queued-prompts"></div></section>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
 <button id="context-chip" type="button" class="option-chip" title="現在のファイルの添付を外す" hidden>現在のファイル ×</button>
@@ -78,6 +78,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <button id="configure-models" type="button" role="menuitem">モデル設定を開く…</button>
 </div></div>
 <button id="cancel" type="button" class="icon-button" title="一時停止して入力を編集" aria-label="一時停止して入力を編集" hidden>${icon('M6 6h12v12H6Z')}</button>
+<button id="stop-generation" type="button" class="icon-button" title="生成を完全停止" aria-label="生成を完全停止" hidden>${icon('M6 6l12 12M18 6 6 18')}</button>
 <button id="send" type="submit" class="send-button" title="送信（Enter）・改行（Shift + Enter）" aria-label="送信" disabled>${icon('M12 19V5m-6 6 6-6 6 6')}</button></div></div></form>
 <p class="footnote">Enter 送信 · Shift＋Enter 改行 · Esc 一時停止</p></footer>
 </div>

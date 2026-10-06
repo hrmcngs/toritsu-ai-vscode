@@ -20,6 +20,26 @@ const { parseExternalActions, externalActionLoop, executeExternalAction, compact
 Module._load = original;
 const block = actions => '```toritsu-actions\n' + JSON.stringify({ actions }) + '\n```';
 const action = { tool: 'open_url', url: 'https://example.com/' };
+test('自動デバッグは変更をコマンドより先に適用し結果を戻す', async () => {
+  const events = [];
+  const answer = await externalActionLoop([], block([action]), async messages => {
+    assert.equal(JSON.parse(messages.at(-1).content).results[0].tool, 'apply_files');
+    return 'テスト結果を確認しました';
+  }, async () => { events.push('test'); return { success: true }; }, undefined, {
+    rounds: 6, prepare: async text => { if (!text.includes('toritsu-actions')) return; events.push('apply'); return '保存済み'; }
+  });
+  assert.deepEqual(events, ['apply', 'test']); assert.match(answer, /確認/);
+});
+test('変更拒否時はテストを実行せず、キャンセル後も変更を適用しない', async () => {
+  let executed = false;
+  await assert.rejects(externalActionLoop([], block([action]), async () => '', async () => { executed = true; }, undefined,
+    { prepare: async () => { throw new Error('変更拒否'); } }), /変更拒否/);
+  assert.equal(executed, false);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(externalActionLoop([], 'answer', async () => '', async () => {}, controller.signal,
+    { prepare: async () => { executed = true; } }), /キャンセル/);
+  assert.equal(executed, false);
+});
 test('Git result follow-up omits large source attachments and retains actual success and rejection details', () => {
   const messages = [
     { role: 'system', content: 'instructions' },
