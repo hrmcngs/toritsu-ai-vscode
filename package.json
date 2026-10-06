@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.10",
+  "version": "0.12.11",
   "publisher": "hrmcngs",
   "icon": "media/extension-icon.png",
   "private": true,
@@ -164,11 +164,15 @@
           "description": "都立AIから実行を要求できるCLI名。PATH上のコマンドを使用し、外部操作の自動承認がオフの場合は実行前に確認します。空配列でコマンド実行を無効にします。"
         },
         "toritsuAI.autoExternalAutoApproval": {
-          "type": "boolean", "default": false, "scope": "machine",
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
           "description": "自動承認モードで外部コマンド・GitHub・ブラウザ操作の確認を省略します。"
         },
         "toritsuAI.fullExternalAutoApproval": {
-          "type": "boolean", "default": false, "scope": "machine",
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
           "description": "フルアクセスモードで外部コマンド・GitHub・ブラウザ操作の確認を省略します。"
         },
         "toritsuAI.approvalMode": {
