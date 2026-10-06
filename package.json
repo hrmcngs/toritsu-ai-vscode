@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.7",
+  "version": "0.12.9",
   "publisher": "hrmcngs",
   "icon": "media/extension-icon.png",
   "private": true,
@@ -24,8 +24,16 @@
   },
   "contributes": {
     "commands": [
-      { "command": "toritsuAI.generateCommitMessage", "title": "都立AI: コミットメッセージを生成", "icon": "$(sparkle)" },
-      { "command": "toritsuAI.commitAndPush", "title": "都立AI: コミットしてpush", "icon": "$(cloud-upload)" },
+      {
+        "command": "toritsuAI.generateCommitMessage",
+        "title": "都立AI: コミットメッセージを生成",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "toritsuAI.commitAndPush",
+        "title": "都立AI: コミットしてpush",
+        "icon": "$(cloud-upload)"
+      },
       {
         "command": "toritsuAI.setApiKey",
         "title": "Toritsu AI: Set API Key"
@@ -70,8 +78,16 @@
     ],
     "menus": {
       "scm/title": [
-        { "command": "toritsuAI.generateCommitMessage", "when": "scmProvider == git", "group": "navigation@20" },
-        { "command": "toritsuAI.commitAndPush", "when": "scmProvider == git", "group": "navigation@21" }
+        {
+          "command": "toritsuAI.generateCommitMessage",
+          "when": "scmProvider == git",
+          "group": "navigation@20"
+        },
+        {
+          "command": "toritsuAI.commitAndPush",
+          "when": "scmProvider == git",
+          "group": "navigation@21"
+        }
       ],
       "editor/title": [
         {
@@ -133,9 +149,17 @@
         },
         "toritsuAI.allowedCommands": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$" },
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"
+          },
           "uniqueItems": true,
-          "default": ["git", "gh", "npm", "pytest"],
+          "default": [
+            "git",
+            "gh",
+            "npm",
+            "pytest"
+          ],
           "scope": "machine",
           "description": "都立AIから実行を要求できるCLI名。PATH上のコマンドを使用し、実行前に毎回確認します。空配列でコマンド実行を無効にします。"
         },
