@@ -150,6 +150,13 @@ article.user { border: 1px solid var(--vscode-panel-border, #ffffff20); }
 article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; overflow: auto; white-space: pre; overflow-wrap: normal; font-family: var(--vscode-editor-font-family); font-size: 12px; line-height: 1.6; tab-size: 2; }
 .generated-file code { font: inherit; }
 
+.prompt-queue { margin-bottom: 8px; max-height: 240px; overflow-y: auto; }
+.queue-heading { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; }
+.queued-prompt { display: grid; grid-template-columns: minmax(0, 1fr) 30px 30px; align-items: center; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border); padding: 4px 0; }
+.queued-prompt textarea { min-height: 48px; max-height: 100px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 4px; padding: 6px; resize: none; }
+.queued-prompt textarea:focus { border-color: var(--vscode-focusBorder); }
+.queued-prompt button { width: 30px; height: 30px; }
+
 /* Compact composer controls with a stable send/stop position. */
 .app { position: relative; }
 textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; }

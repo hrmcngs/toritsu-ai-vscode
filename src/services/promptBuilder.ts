@@ -2,8 +2,11 @@ import { FileContext, ImageAttachment, Message } from '../types/ai';
 import { LinkSource } from './linkReader';
 import { TextAttachment } from './fileAttachments';
 import { A1Mode } from '../types/a1';
+import { DEFAULT_ALLOWED_COMMANDS } from './commandPolicy';
 
-export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; outputDirectory?: string; mode?: A1Mode }
+export interface ChatOptions { files?: readonly TextAttachment[]; goal?: string; planMode?: boolean; outputDirectory?: string; mode?: A1Mode; allowedCommands?: readonly string[] }
+
+const ACTION_INSTRUCTIONS = '外部操作は単一のtoritsu-actionsブロックでJSON {"actions":[...]}。tool: open_url（ブラウザ）/read_public_url（公開本文）はurlにHTTPS URL、run_commandはcommandに許可CLI、argsに引数配列、cwdにワークスペース内の絶対パス（省略可）。承認後に実行、最大3件×3ラウンド。結果前に成功と主張しない。認証情報の出力・対話ログイン・クリック不可。ファイル保存とテスト・commit/pushは別の依頼で行う。';
 
 function modeHistory(history: readonly Message[], mode?: A1Mode): readonly Message[] {
   if (!mode) return history;
@@ -69,7 +72,8 @@ export function chatPrompt(history: readonly Message[], text: string, context?: 
   const content = context || sources.length || options.files?.length || options.goal || options.outputDirectory ? JSON.stringify({ instruction: text, context, outputDirectory: options.outputDirectory, sources: sources.length ? sources : undefined,
     files: options.files?.map(({ name, path, text }) => ({ name, path, text })), goal: options.goal || undefined }) : text;
   return [
-    { role: 'system', content: CHAT_INSTRUCTIONS + (options.planMode ? '' : FILE_INSTRUCTIONS) +
+    { role: 'system', content: CHAT_INSTRUCTIONS + (options.planMode ? '' : FILE_INSTRUCTIONS + ACTION_INSTRUCTIONS + `許可CLI: ${JSON.stringify(options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS)}。` +
+      ((options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS).includes('gh') ? 'リポジトリ作成は{"tool":"github.createRepo","args":{"name":"名前","private":true,"autoInit":true,"description":"説明（省略可）"}}を優先。個人アカウントに作成しURLを返す。remote設定は結果のURLで別のgit操作として承認を求める。' : '')) +
       (options.mode === 'fast' ? '回答は要点を簡潔に。必要なコードは省略しないでください。' : options.mode === 'reasoning' ? '複雑な変更では整合性・例外・検証方法を重視し、結論と根拠の要約を示してください。必要なコードは省略しないでください。' : '') },
     ...(options.planMode ? [{ role: 'system' as const, content: 'プランモードです。実装コードは生成せず、要件の整理、必要な確認事項、変更するファイル、実装手順と検証方法を提案してください。操作を実行したと主張しないでください。' }] : []),
     ...modeHistory(history, options.mode),

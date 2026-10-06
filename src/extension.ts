@@ -5,7 +5,9 @@ import { ModelSelection, usesToritsuPublicApi } from './services/modelSelection'
 import { explainCode } from './commands/explainCode';
 import { editSelection } from './commands/editSelection';
 import { openChat } from './commands/openChat';
+import { commitAndPush, generateCommitMessage } from './commands/sourceControl';
 import { ChatViewProvider } from './providers/chatViewProvider';
+import { BrowserHandoff } from './services/browserHandoff';
 import { API_KEY_SECRET, ToritsuAiClient } from './services/toritsuAiClient';
 import { LlmClient } from './services/llmClient';
 import { errorMessage, runRequest } from './utils/runRequest';
@@ -49,14 +51,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return new ApprovedClient(approvals, transport).complete(messages, signal, onDelta);
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
-  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models);
+  const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
   const showChat = () => openChat(() => chat.openFallbackPanel());
   const authorized = async (action: () => Promise<void>) => {
     try { await auth.requireSession(); }
     catch (error) { await showChat(); throw error; }
     await action();
   };
-  const commands: [string, () => Promise<void>][] = [
+  const commands: [string, (sourceControl?: unknown) => Promise<void>][] = [
+    ['toritsuAI.generateCommitMessage', sourceControl => authorized(() => generateCommitMessage(client, sourceControl))],
+    ['toritsuAI.commitAndPush', commitAndPush],
     ['toritsuAI.setupConnection', async () => { await setup.ensureConnection(undefined, true); await auth.restore(); await models.select('custom'); }],
     ['toritsuAI.checkConnection', async () => {
       await setup.ensureConnection();
@@ -90,8 +94,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   ];
   context.subscriptions.push(chat, vscode.window.registerWebviewViewProvider('toritsuAI.chat', chat));
   for (const [id, action] of commands) {
-    context.subscriptions.push(vscode.commands.registerCommand(id, async () => {
-      try { await action(); }
+    context.subscriptions.push(vscode.commands.registerCommand(id, async (sourceControl?: unknown) => {
+      try { await action(sourceControl); }
       catch (error) {
         if (error instanceof ConnectionSetupCancelled) {
           const selected = await vscode.window.showInformationMessage(CONNECTION_SETUP_NOTICE, '接続設定を再開');

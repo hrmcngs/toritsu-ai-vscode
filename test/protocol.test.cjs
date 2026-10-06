@@ -73,7 +73,10 @@ test('授業用APIは会話履歴を含め、画像・不正な応答は明確�
 test('通常チャットの固定指示を簡潔に保ち、質問や添付本文は削らない', () => {
   const { chatPrompt } = require('../dist/services/promptBuilder');
   const short = chatPrompt([], 'こんにちは');
-  assert.ok(short[0].content.length < 500);
+  assert.ok(short[0].content.length < 900);
+  assert.match(short[0].content, /toritsu-actions/);
+  assert.match(short[0].content, /npm/);
+  assert.match(chatPrompt([], 'test', undefined, [], [], { allowedCommands: ['custom-cli'] })[0].content, /許可CLI: \["custom-cli"\]/);
   assert.equal(short.at(-1).content, 'こんにちは');
   assert.match(short[0].content, /toritsu-files/);
   assert.match(short[0].content, /original/);
@@ -81,6 +84,7 @@ test('通常チャットの固定指示を簡潔に保ち、質問や添付本�
   const withFile=chatPrompt([], '変更して', context);
   assert.deepEqual(JSON.parse(withFile.at(-1).content).context, context);
   assert.doesNotMatch(chatPrompt([], '計画して', undefined, [], [], {planMode:true})[0].content, /toritsu-files/);
+  assert.doesNotMatch(chatPrompt([], '計画して', undefined, [], [], {planMode:true})[0].content, /toritsu-actions/);
 });
 
 test('授業用の高速・推論は回答方針と履歴量を変更し最新のコードは維持',()=>{

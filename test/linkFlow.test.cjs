@@ -49,6 +49,61 @@ test('未読リンクは送信せず、API失敗時は資料を保持', async t 
   assert.equal(calls, 1); assert.equal(state().sources.length, 1);
 });
 
+test('実行中に次の依頼を待機し、編集済みの本文を完了後に順番に実行する', async t => {
+  let finish;
+  const requests = [];
+  const { provider, state } = setup(t, async messages => {
+    requests.push(messages.at(-1).content);
+    if (requests.length === 1) return new Promise(resolve => { finish = resolve; });
+    return 'ok';
+  });
+  const active = provider.receive({ type: 'send', text: 'first' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  await provider.receive({ type: 'queuePrompt', text: 'second' });
+  await provider.receive({ type: 'queuePrompt', text: 'third' });
+  const id = state().pendingPrompts[0].id;
+  await provider.receive({ type: 'editQueuedPrompt', id, text: 'edited second', editing: false });
+  assert.equal(requests.length, 1); assert.equal(state().pendingPrompts.length, 2);
+  finish('ok'); await active;
+  assert.deepEqual(requests, ['first', 'edited second', 'third']);
+  assert.deepEqual(state().pendingPrompts, []);
+});
+
+test('待機文の編集中は完了後も実行せず、矢印で再開して削除済み文は実行しない', async t => {
+  let finish;
+  const requests = [];
+  const { provider, state } = setup(t, async messages => {
+    requests.push(messages.at(-1).content);
+    if (requests.length === 1) return new Promise(resolve => { finish = resolve; });
+    return 'ok';
+  });
+  const active = provider.receive({ type: 'send', text: 'first' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  await provider.receive({ type: 'queuePrompt', text: 'second' });
+  await provider.receive({ type: 'queuePrompt', text: 'remove me' });
+  const [second, removed] = state().pendingPrompts;
+  await provider.receive({ type: 'editQueuedPrompt', id: second.id, text: 'editing', editing: true });
+  await provider.receive({ type: 'removeQueuedPrompt', id: removed.id });
+  finish('ok'); await active;
+  assert.deepEqual(requests, ['first']); assert.equal(state().pendingPrompts.length, 1);
+  await provider.receive({ type: 'runQueuedPrompt', id: second.id, text: 'final text' });
+  assert.deepEqual(requests, ['first', 'final text']);
+});
+
+test('失敗時は待機を保留し、キー削除で待機文を破棄する', async t => {
+  let fail;
+  let calls = 0;
+  const { provider, state, logout } = setup(t, async () => {
+    calls++; return new Promise((_resolve, reject) => { fail = reject; });
+  });
+  const active = provider.receive({ type: 'send', text: 'first' });
+  while (!fail) await new Promise(resolve => setImmediate(resolve));
+  await provider.receive({ type: 'queuePrompt', text: 'second' });
+  fail(new Error('failed')); await active;
+  assert.equal(calls, 1); assert.equal(state().pendingPrompts.length, 1);
+  logout(); assert.deepEqual(state().pendingPrompts, []);
+});
+
 test('ログアウト中に完了した読込結果は破棄', async t => {
   const { provider, state, logout } = setup(t, async () => 'unused');
   let finish;

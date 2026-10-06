@@ -20,6 +20,7 @@ import { ApprovalService } from '../services/approvalService';
 import { validateImages } from '../services/imageAttachments';
 import { ModelSelection } from '../services/modelSelection';
 import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/linkReader';
+import { allowedCommands, executeExternalAction, externalActionLoop } from '../services/externalActions';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: Pick<vscode.WebviewView, 'webview' | 'onDidDispose'>;
@@ -44,6 +45,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private viewSubscriptions: vscode.Disposable[] = [];
   private generation?: { gate: PauseGate; input: string; signature: string; sessionKey: string };
   private queuedSend?: unknown;
+  private pendingPrompts: { id: string; text: string; editing: boolean }[] = [];
+  private promptSequence = 0;
+  private dispatchingPrompt = false;
   private partialAnswer = '';
   private displayMode: 'live' | 'received' = 'live';
   private error = '';
@@ -71,7 +75,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       auth.onDidChange(() => {
         this.approvalPrompt.cancel();
         this.controller?.abort();
-        this.queuedSend = undefined; this.generation = undefined;
+        this.queuedSend = undefined; this.pendingPrompts = []; this.generation = undefined;
         this.partialAnswer = '';
         this.modelController?.abort();
         this.history.setAccount(auth.session?.accountId);
@@ -111,11 +115,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     view.webview.html = chatHtml(view.webview, media);
     this.viewSubscriptions = [
       view.webview.onDidReceiveMessage((message: unknown) => { void this.receive(message); }),
-      view.onDidDispose(() => { if (this.view === view) { this.approvalPrompt.cancel(); this.controller?.abort(); this.queuedSend = undefined; this.partialAnswer = ''; this.view = undefined; } })
+      view.onDidDispose(() => { if (this.view === view) { this.approvalPrompt.cancel(); this.controller?.abort(); this.queuedSend = undefined; this.pendingPrompts = []; this.partialAnswer = ''; this.view = undefined; } })
     ];
   }
 
-  private publish(clearInput = false): void {
+  private publish(clearInput = false, preserveDraft = false): void {
     const session = this.auth.session;
     void this.view?.webview.postMessage({
       type: 'state', paused: !!session && !!this.generation?.gate.paused, canPause: !!this.generation && !this.approvalPrompt.current, partialAnswer: session ? this.partialAnswer : '', displayMode: this.displayMode, browserMode: this.browser?.enabled ?? false, messages: session ? this.history.messages : [],
@@ -132,14 +136,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       files: session ? this.files : [], loadingFiles: this.loadingFiles,
       generationPath: session ? this.generationPath : '',
       goal: session ? this.goal : '', planMode: this.planMode, notice: this.notice,
-      error: this.error, clearInput
+      pendingPrompts: session ? this.pendingPrompts : [],
+      error: this.error, clearInput, preserveDraft
     });
   }
 
   private async receive(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown };
+    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown; editing?: unknown };
     if (message.type === 'ready') { this.publish(); return; }
+    if (message.type === 'queuePrompt' || message.type === 'editQueuedPrompt' || message.type === 'removeQueuedPrompt' || message.type === 'runQueuedPrompt') {
+      if (!this.auth.session || this.browser?.enabled) return;
+      if (message.type === 'queuePrompt') {
+        if (typeof message.text !== 'string' || !message.text.trim()) return;
+        if (this.pendingPrompts.length >= 10) { this.error = '待機できるプロンプトは10件までです。'; this.publish(); return; }
+        this.pendingPrompts.push({ id: String(++this.promptSequence), text: message.text, editing: false });
+      } else {
+        const index = this.pendingPrompts.findIndex(item => item.id === message.id);
+        if (index < 0) return;
+        if (message.type === 'removeQueuedPrompt') this.pendingPrompts.splice(index, 1);
+        else if (message.type === 'editQueuedPrompt') {
+          if (typeof message.text === 'string') this.pendingPrompts[index].text = message.text;
+          if (typeof message.editing === 'boolean') this.pendingPrompts[index].editing = message.editing;
+        } else {
+          const [item] = this.pendingPrompts.splice(index, 1);
+          item.editing = false;
+          if (typeof message.text === 'string') item.text = message.text;
+          this.pendingPrompts.unshift(item); this.error = '';
+        }
+      }
+      this.publish();
+      await this.drainPrompts();
+      return;
+    }
     if (message.type === 'pause' && this.generation && !this.approvalPrompt.current) {
       this.generation.gate.pause(); this.error = ''; this.publish(); return;
     }
@@ -294,6 +323,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
       if (message.type === 'home') { this.showHistory(); return; }
       if (message.type === 'new') {
+        if (this.controller) return;
+        this.pendingPrompts = [];
         this.goal = ''; this.planMode = false;
         this.showingHistory = false;
         this.sources = []; this.files = []; this.notice = '';
@@ -310,11 +341,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (confirmed !== '削除する' || this.controller || this.auth.session?.key !== session.key) return;
         if (message.type === 'clear') this.history.clear();
         else this.history.remove(id!);
+        this.pendingPrompts = [];
         this.sources = []; this.files = []; this.notice = ''; this.error = ''; this.publish(true);
         await this.history.save();
         return;
       }
       if (message.type === 'select' && typeof message.id === 'string') {
+        if (this.controller) return;
+        this.pendingPrompts = [];
         this.goal = ''; this.planMode = false;
         this.sources = []; this.files = []; this.notice = '';
         if (!this.auth.session) return;
@@ -363,7 +397,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const editSources = this.files.map(file => ({ path: file.path, text: file.text }));
         if (context && editor?.document.uri.scheme === 'file') editSources.push({ path: editor.document.uri.fsPath, text: context.fullText });
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
-        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory, mode: this.models.state.mode });
+        const request = chatPrompt(this.history.messages, text, context, images, this.sources, { files: this.files, goal: this.goal, planMode: this.planMode, outputDirectory, mode: this.models.state.mode, allowedCommands: allowedCommands() });
         let lastPublish = 0;
         let received = '';
         const showDelta = (delta: string) => {
@@ -393,7 +427,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await gate.wait(controller.signal);
           return answer;
         };
-        const answer = await receiveAnswer(request);
+        const initialAnswer = await receiveAnswer(request);
+        const answer = this.planMode ? initialAnswer : await externalActionLoop(request, initialAnswer, receiveAnswer, async action => {
+          await gate.wait(controller.signal);
+          if (this.auth.session?.key !== session.key) throw new Error('接続先が変わりました。');
+          this.notice = action.tool === 'github.createRepo' ? `GitHubリポジトリを作成: ${action.args.name}`
+            : action.tool === 'run_command' ? `コマンドを実行: ${action.command} ${JSON.stringify(action.args)}`
+            : `${action.tool === 'open_url' ? 'ブラウザを開く' : '公開ページを読み込む'}: ${action.url}`;
+          this.publish();
+          return executeExternalAction(action, this.approvals, this.linkReader, controller.signal);
+        }, controller.signal);
         if (controller.signal.aborted || this.auth.session?.key !== session.key) {
           throw new Error('APIキー・接続先の変更またはキャンセルにより、結果を破棄しました。');
         }
@@ -406,7 +449,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.partialAnswer = '';
         this.history.append(historyText + sourceNote + fileNote + optionsNote, answer, message.text);
         this.sources = []; this.files = []; this.notice = '';
-        this.publish(true);
+        this.publish(true, true);
         await this.history.save();
         if (!this.planMode) {
           const generated = parseGeneratedFiles(answer);
@@ -440,12 +483,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       const queued = ownsGeneration ? this.queuedSend : undefined;
       if (ownsGeneration) this.queuedSend = undefined;
       if (queued) await this.receive(queued);
-      else this.publish();
+      else { this.publish(); await this.drainPrompts(); }
     }
+  }
+
+  private async drainPrompts(): Promise<void> {
+    if (this.dispatchingPrompt) return;
+    this.dispatchingPrompt = true;
+    try {
+      while (this.auth.session && !this.controller && !this.error && !this.changingModel && !this.approvalPrompt.current && this.pendingPrompts.length) {
+        const item = this.pendingPrompts[0];
+        if (item.editing || !item.text.trim()) break;
+        this.pendingPrompts.shift();
+        void this.view?.webview.postMessage({ type: 'queuedPromptStarted', id: item.id, text: item.text });
+        await this.receive({ type: 'send', text: item.text, includeContext: false, images: [] });
+      }
+    } finally { this.dispatchingPrompt = false; this.publish(); }
   }
 
   showHistory(): void {
     if (!this.auth.session || this.controller) return;
+    this.pendingPrompts = [];
     this.sources = []; this.files = []; this.notice = '';
     this.history.startNew();
     this.goal = ''; this.planMode = false;
@@ -457,7 +515,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.panel?.dispose();
     this.approvalPrompt.cancel();
     this.controller?.abort();
-    this.queuedSend = undefined;
+    this.queuedSend = undefined; this.pendingPrompts = [];
     this.modelController?.abort();
     [...this.subscriptions, ...this.viewSubscriptions].forEach(item => item.dispose());
   }

@@ -31,6 +31,7 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 </main>
 <button id="latest" type="button" class="latest-button" aria-label="最新の回答へ移動" hidden>↓ 最新へ</button>
 <footer><p id="browser-help" class="attachment-hint" hidden>ブラウザ版モード：質問と添付コードをコピーし、都立AIを開きます。ブラウザに貼り付けて送信してください。モデルもブラウザで選べます。</p><p id="status" role="status"></p><p id="error" role="alert"></p>
+<section id="prompt-queue" class="prompt-queue" aria-label="待機中のプロンプト" hidden><div class="queue-heading">待機中<span id="queue-count"></span></div><div id="queued-prompts"></div></section>
 <form id="form" class="composer"><label class="sr-only" for="prompt">メッセージ</label>
 <button id="context-chip" type="button" class="option-chip" title="現在のファイルの添付を外す" hidden>現在のファイル ×</button>
 <div id="options-summary" class="options-summary" hidden></div>

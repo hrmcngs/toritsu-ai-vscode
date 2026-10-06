@@ -17,6 +17,8 @@ function ui() {
       this.listeners[name]?.(event); return event;
     }
     append(...items) { this.children.push(...items); }
+    insertBefore(item, before) { this.children = this.children.filter(child => child !== item); const index = before ? this.children.indexOf(before) : this.children.length; this.children.splice(index, 0, item); item.parent = this; }
+    remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
     replaceChildren(...items) { this.children = items; }
     setAttribute() {}
     querySelectorAll() { return []; }
@@ -40,7 +42,7 @@ function ui() {
     modelSelection: { label: 'test', options: [] }, sources: [], files: [], error: '', account: 'test', activeChatId: 'one' };
   const publish = changes => events.message({ data: { ...base, ...changes } });
   publish({});
-  return { el, sent, publish };
+  return { el, sent, publish, message: data => events.message({ data }) };
 }
 
 test('上で質問を遡り、下で元の下書きへ戻る。複数行の通常移動と選択は維持', () => {
@@ -101,7 +103,7 @@ test('Webviewの上キーで入力を呼び出す。IME・修飾キーは履歴�
 test('停止するとすぐ編集でき、停止中は二重送信せず、停止完了後に修正文を送る', () => {
   const { el, sent, publish } = ui(); const input = el('prompt');
   input.value = '最初の質問'; el('form').emit('submit');
-  publish({ busy: true }); assert.equal(input.disabled, true);
+  publish({ busy: true }); assert.equal(input.disabled, false);
   el('cancel').emit('click'); assert.equal(sent.at(-1).type, 'cancel');
   assert.equal(input.disabled, false); assert.equal(input.focused, true);
   input.value = '修正した質問'; input.emit('input');
@@ -123,6 +125,35 @@ test('停止と完了通知が競合しても編集した下書きを消さず�
 function visibleText(element) {
   return [element.textContent || '', ...element.children.map(visibleText)].join('\n');
 }
+
+test('生成中の入力は待機し、完了しても入力途中の下書きを残す', () => {
+  const { el, sent, publish } = ui();
+  el('prompt').value = '最初'; el('form').emit('submit'); publish({ busy: true });
+  assert.equal(el('prompt').disabled, false); assert.equal(el('send').hidden, false);
+  el('prompt').value = '次の依頼'; el('prompt').emit('input'); el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'queuePrompt'); assert.equal(sent.at(-1).text, '次の依頼');
+  assert.equal(el('prompt').value, '');
+  el('prompt').value = 'まだ編集中'; el('prompt').emit('input');
+  publish({ busy: true, clearInput: true, preserveDraft: true });
+  assert.equal(el('prompt').value, 'まだ編集中');
+  publish({ signedIn: false, clearInput: true }); assert.equal(el('prompt').value, '');
+});
+
+test('待機文の編集・次に送る矢印・削除は対象IDと本文を送る', () => {
+  const { el, sent, publish } = ui();
+  const pendingPrompts = [{ id: 'q1', text: '待機文', editing: false }];
+  publish({ busy: true, pendingPrompts });
+  assert.equal(el('prompt-queue').hidden, false);
+  const [input, send, remove] = el('queued-prompts').children[0].children;
+  assert.equal(input.value, '待機文'); input.emit('focus');
+  assert.equal(sent.at(-1).editing, true);
+  input.value = '変更した待機文'; input.emit('input');
+  assert.equal(sent.at(-1).type, 'editQueuedPrompt'); assert.equal(sent.at(-1).text, input.value);
+  send.emit('click'); assert.equal(sent.at(-1).type, 'runQueuedPrompt'); assert.equal(sent.at(-1).id, 'q1');
+  assert.equal(sent.at(-1).text, input.value);
+  remove.emit('click'); assert.equal(sent.at(-1).type, 'removeQueuedPrompt');
+  publish({ pendingPrompts: [] }); assert.equal(el('queued-prompts').children.length, 0);
+});
 
 test('送信直後に質問と待機状態を表示し、成功後は質問を二重表示しない', () => {
   const { el, sent, publish } = ui(); const input = el('prompt');

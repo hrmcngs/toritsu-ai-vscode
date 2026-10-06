@@ -11,6 +11,7 @@
   let pendingSubmission = false;
   let stopping = false;
   let submission;
+  let draftDuringGeneration = false;
   const filePreviewOpen = new Map();
   const defaultPlaceholder = prompt.placeholder;
   function resizePrompt() {
@@ -158,7 +159,7 @@
     if (submission || state.partialAnswer) {
       el('welcome').hidden = true; el('messages').hidden = false; el('recent').hidden = true;
     }
-    prompt.placeholder = submission?.status === 'sending' ? '送信中…停止ボタンで入力を編集できます' : defaultPlaceholder;
+    prompt.placeholder = state.busy && !state.paused && !state.browserMode ? '次の依頼を入力…' : defaultPlaceholder;
     if (messages.length && follow) el('content').scrollTop = el('content').scrollHeight;
     updateScrollButton();
   }
@@ -168,10 +169,48 @@
   function syncControls() {
     const disabled = !state.signedIn || state.busy || state.changingModel || reading;
     for (const id of ['send', 'attach', 'prompt', 'context', 'load-links']) el(id).disabled = disabled;
+    if (state.signedIn && !state.changingModel && !reading && !state.browserMode) {
+      prompt.disabled = false;
+      el('send').disabled = stopping;
+    }
     if ((stopping || state.paused) && state.signedIn) prompt.disabled = false;
     if (state.paused && state.signedIn) el('send').disabled = false;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     for (const button of el('attachments').querySelectorAll('button')) button.disabled = state.busy || reading;
+  }
+  function renderPromptQueue() {
+    const items = state.pendingPrompts ?? [];
+    const container = el('queued-prompts');
+    el('prompt-queue').hidden = !items.length;
+    el('queue-count').textContent = String(items.length);
+    const existing = new Map([...container.children].map(row => [row.dataset.id, row]));
+    for (const item of items) {
+      let row = existing.get(item.id);
+      if (!row) {
+        row = document.createElement('div'); row.className = 'queued-prompt'; row.dataset.id = item.id;
+        const input = document.createElement('textarea'); input.rows = 2;
+        input.setAttribute('aria-label', '待機中のプロンプトを編集');
+        const update = editing => vscode.postMessage({ type: 'editQueuedPrompt', id: item.id, text: input.value, editing });
+        input.addEventListener('focus', () => update(true));
+        input.addEventListener('input', () => update(true));
+        input.addEventListener('blur', () => update(false));
+        const send = document.createElement('button'); send.type = 'button'; send.className = 'icon-button queued-send';
+        send.innerHTML = el('send').innerHTML;
+        send.title = '次に送る'; send.setAttribute('aria-label', 'このプロンプトを次に送る');
+        send.addEventListener('mousedown', event => event.preventDefault());
+        send.addEventListener('click', () => vscode.postMessage({ type: 'runQueuedPrompt', id: item.id, text: input.value }));
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'icon-button'; remove.textContent = '×';
+        remove.title = '待機から削除'; remove.setAttribute('aria-label', '待機中のプロンプトを削除');
+        remove.addEventListener('mousedown', event => event.preventDefault());
+        remove.addEventListener('click', () => vscode.postMessage({ type: 'removeQueuedPrompt', id: item.id }));
+        row.append(input, send, remove);
+      }
+      if (document.activeElement !== row.children[0]) row.children[0].value = item.text;
+      existing.delete(item.id);
+      const position = items.indexOf(item);
+      if (container.children[position] !== row) container.insertBefore(row, container.children[position] ?? null);
+    }
+    for (const row of existing.values()) row.remove();
   }
   function renderImages() {
     el('attachments').replaceChildren();
@@ -360,10 +399,17 @@
   }
   el('form').addEventListener('submit', event => {
     event.preventDefault();
+    if (state.signedIn && state.busy && !state.paused && !stopping && !state.browserMode && !state.changingModel && !reading) {
+      if (!prompt.value.trim() || (state.pendingPrompts?.length ?? 0) >= 10) return;
+      vscode.postMessage({ type: 'queuePrompt', text: prompt.value });
+      prompt.value = ''; draftDuringGeneration = false; inputHistory.reset(); resizePrompt(); prompt.focus();
+      return;
+    }
     if (!state.signedIn || (state.busy && !state.paused) || state.changingModel || reading || (!prompt.value.trim() && !images.length && !state.sources?.length && !state.files?.length)) return;
     state.busy = true; state.paused = false;
     pendingSubmission = true;
     stopping = false;
+    draftDuringGeneration = false;
     inputHistory.reset();
     syncControls(); closeApprovalMenu(); closeModelMenu(); closeAddMenu();
     const request = { type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) };
@@ -373,7 +419,7 @@
       prompt.value = '';
       resizePrompt();
       renderMessages();
-      el('cancel').hidden = false; el('send').hidden = true;
+      el('cancel').hidden = false; el('send').hidden = !!state.browserMode;
       el('status').textContent = '質問を送信しています…';
     }
     vscode.postMessage(request);
@@ -393,7 +439,7 @@
       event.preventDefault(); el('form').requestSubmit();
     }
   });
-  prompt.addEventListener('input', () => { inputHistory.reset(); resizePrompt(); });
+  prompt.addEventListener('input', () => { draftDuringGeneration = state.busy && !state.paused; inputHistory.reset(); resizePrompt(); });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
     const menuOpen = ['add-menu', 'model-menu', 'approval-menu'].some(id => !el(id).hidden);
@@ -406,6 +452,11 @@
     return minutes < 1 ? '今' : minutes < 60 ? `${minutes}分前` : minutes < 1440 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
   }
   window.addEventListener('message', event => {
+    if (event.data.type === 'queuedPromptStarted') {
+      submission = { input: event.data.text, text: event.data.text, status: 'sending' };
+      pendingSubmission = true; stopping = false;
+      return;
+    }
     if (event.data.type !== 'state') return;
     const wasStopping = stopping;
     const previousChatId = state.activeChatId;
@@ -424,7 +475,7 @@
     inputHistory.set(state.signedIn ? (state.inputHistory ?? state.messages.filter(message => message.role === 'user').map(message => message.content)) : []);
     if (!state.signedIn || !state.busy) { stopping = false; pendingSubmission = false; }
     el('browser-help').hidden = !state.browserMode;
-    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : '送信（Enter）・改行（Shift + Enter）';
+    el('send').title = state.paused ? '再開（入力を変更した場合は新しく生成）' : state.browserMode ? '質問をコピーして都立AIを開く' : state.busy ? '次の依頼として待機させる' : '送信（Enter）・改行（Shift + Enter）';
     el('send').setAttribute('aria-label', el('send').title);
     if (!state.signedIn || state.busy) closeAddMenu();
     if (!state.signedIn || state.clearInput) { el('sketch-dialog').close(); resetSketch(); }
@@ -534,7 +585,7 @@
     el('cancel').hidden = !state.busy || state.paused;
     el('cancel').title = state.canPause ? '一時停止して入力を編集' : '処理を停止';
     el('cancel').setAttribute('aria-label', el('cancel').title);
-    el('send').hidden = state.busy && !state.paused;
+    el('send').hidden = state.busy && !state.paused && !!state.browserMode;
     el('status').textContent = state.paused ? '一時停止中。送信で再開、内容を変更して送信すると考え直します。API側の処理は続く場合があります。' : stopping ? '停止しています…入力を編集できます。' : state.busy ? (state.loadingFiles ? 'ファイルを読み込んでいます…' : state.loadingLinks ? 'リンク先の資料を読み込んでいます…' : '都立AIが考えています…') : (state.notice || '');
     const approval = el('operation-approval');
     const request = state.approvalRequest;
@@ -568,14 +619,17 @@
       el('status').textContent = '操作内容を確認して、許可または拒否を選んでください。';
     }
     el('error').textContent = state.error;
-    if (!state.signedIn || (state.clearInput && !wasStopping)) { prompt.value = ''; context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false; }
+    if (!state.signedIn || (state.clearInput && !wasStopping)) {
+      if (!state.signedIn || !state.preserveDraft || !draftDuringGeneration) { prompt.value = ''; draftDuringGeneration = false; }
+      context.checked = false; resetImages(); inputHistory.reset(); pendingSubmission = false;
+    }
     if ((state.clearInput || wasStopping) && state.signedIn && !state.busy) prompt.focus();
     renderMessages();
     if (previousChatId !== state.activeChatId) el('content').scrollTop = el('content').scrollHeight;
     el('context-chip').hidden = !context.checked;
     el('context-chip').disabled = context.disabled;
     el('context-option').setAttribute('aria-checked', String(context.checked));
-    resizePrompt(); updateScrollButton();
+    renderPromptQueue(); resizePrompt(); updateScrollButton();
   });
   vscode.postMessage({ type: 'ready' });
 })();
