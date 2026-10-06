@@ -2,11 +2,13 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.13",
+  "version": "0.12.14",
   "publisher": "hrmcngs",
   "icon": "media/extension-icon.png",
   "private": true,
-  "enabledApiProposals": ["chatSessionsProvider"],
+  "enabledApiProposals": [
+    "chatSessionsProvider"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/hrmcngs/toritsu-ai-vscode.git"
@@ -24,17 +26,46 @@
     }
   },
   "contributes": {
-    "chatSessions": [{
-      "type": "toritsu-ai", "name": "toritsu-ai", "displayName": "都立AI", "icon": "$(comment-discussion)",
-      "description": "都立AIの授業用APIで生成するローカルセッション", "order": 10,
-      "requiresCopilotSignIn": false,
-      "capabilities": { "supportsFileAttachments": false, "supportsImageAttachments": false, "supportsToolAttachments": false }
-    }],
-    "chatParticipants": [{ "id": "hrmcngs.toritsu-ai.session", "name": "toritsuAI", "fullName": "都立AI", "description": "都立AIセッション", "isSticky": true }],
+    "chatSessions": [
+      {
+        "type": "toritsu-ai",
+        "name": "toritsu-ai",
+        "displayName": "都立AI",
+        "icon": "$(comment-discussion)",
+        "description": "都立AIの授業用APIで生成するローカルセッション",
+        "order": 10,
+        "requiresCopilotSignIn": false,
+        "capabilities": {
+          "supportsFileAttachments": false,
+          "supportsImageAttachments": false,
+          "supportsToolAttachments": false
+        }
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "hrmcngs.toritsu-ai.session",
+        "name": "toritsuAI",
+        "fullName": "都立AI",
+        "description": "都立AIセッション",
+        "isSticky": true
+      }
+    ],
     "commands": [
-      { "command": "toritsuAI.checkSessionsIntegration", "title": "都立AI: Sessions連携を確認" },
-      { "command": "toritsuAI.renameSession", "title": "名前を変更", "icon": "$(edit)" },
-      { "command": "toritsuAI.deleteSession", "title": "削除", "icon": "$(trash)" },
+      {
+        "command": "toritsuAI.checkSessionsIntegration",
+        "title": "都立AI: Sessions連携を確認"
+      },
+      {
+        "command": "toritsuAI.renameSession",
+        "title": "名前を変更",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "toritsuAI.deleteSession",
+        "title": "削除",
+        "icon": "$(trash)"
+      },
       {
         "command": "toritsuAI.generateCommitMessage",
         "title": "都立AI: コミットメッセージを生成",
@@ -92,14 +123,39 @@
       }
     ],
     "menus": {
-      "commandPalette": [{ "command": "toritsuAI.renameSession", "when": "false" }, { "command": "toritsuAI.deleteSession", "when": "false" }],
+      "commandPalette": [
+        {
+          "command": "toritsuAI.renameSession",
+          "when": "false"
+        },
+        {
+          "command": "toritsuAI.deleteSession",
+          "when": "false"
+        }
+      ],
       "chat/chatSessions": [
-        { "command": "toritsuAI.renameSession", "when": "chatSessionType == toritsu-ai", "group": "1_edit@4" },
-        { "command": "toritsuAI.deleteSession", "when": "chatSessionType == toritsu-ai", "group": "1_edit@10" }
+        {
+          "command": "toritsuAI.renameSession",
+          "when": "chatSessionType == toritsu-ai",
+          "group": "1_edit@4"
+        },
+        {
+          "command": "toritsuAI.deleteSession",
+          "when": "chatSessionType == toritsu-ai",
+          "group": "1_edit@10"
+        }
       ],
       "chatSessions/item/context": [
-        { "command": "toritsuAI.renameSession", "when": "sessionType == toritsu-ai", "group": "1_edit@4" },
-        { "command": "toritsuAI.deleteSession", "when": "sessionType == toritsu-ai", "group": "1_edit@10" }
+        {
+          "command": "toritsuAI.renameSession",
+          "when": "sessionType == toritsu-ai",
+          "group": "1_edit@4"
+        },
+        {
+          "command": "toritsuAI.deleteSession",
+          "when": "sessionType == toritsu-ai",
+          "group": "1_edit@10"
+        }
       ],
       "scm/title": [
         {
