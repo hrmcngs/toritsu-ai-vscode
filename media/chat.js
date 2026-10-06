@@ -56,7 +56,9 @@
       if (!value.trim()) return;
       const plain = text => {
         if (!text.trim()) return;
-        const paragraph = document.createElement('pre'); paragraph.textContent = text; article.append(paragraph);
+        const paragraph = document.createElement('div');
+        window.renderMarkdown(paragraph, text, url => vscode.postMessage({ type: 'openMarkdownLink', text: url }));
+        article.append(paragraph);
       };
       let offset = 0;
       for (const match of value.matchAll(/^```([^\n]*)\n([\s\S]*?)^```[^\S\r\n]*\r?$/gm)) {
@@ -154,8 +156,9 @@
       const content = document.createElement('p'); content.className = 'waiting-label'; content.textContent = state.paused ? '一時停止中 — 内容を変えずに送信すると再開します' : state.partialAnswer ? (state.displayMode === 'received' ? '回答を表示中（受信済み）…' : '生成中…') : '回答を待っています…';
       waiting.append(label, content);
       if (state.partialAnswer) {
-        const preview = document.createElement('pre'); preview.className = 'streaming-preview';
-        preview.textContent = streamingPreview(state.partialAnswer); waiting.append(preview);
+        const preview = document.createElement('div');
+        window.renderMarkdown(preview, streamingPreview(state.partialAnswer), url => vscode.postMessage({ type: 'openMarkdownLink', text: url }));
+        waiting.append(preview);
       }
       el('messages').append(waiting);
     }

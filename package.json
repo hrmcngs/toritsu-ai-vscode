@@ -322,6 +322,7 @@
   "dependencies": {
     "cheerio": "^1.0.0",
     "ipaddr.js": "^2.2.0",
+    "marked": "^18.0.14",
     "pdfjs-dist": "^4.10.38"
   },
   "activationEvents": [

@@ -111,7 +111,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.viewSubscriptions.forEach(item => item.dispose());
     this.view = view;
     const media = vscode.Uri.joinPath(this.extensionUri, 'media');
-    view.webview.options = { enableScripts: true, localResourceRoots: [media] };
+    view.webview.options = { enableScripts: true, localResourceRoots: [media, vscode.Uri.joinPath(media, '..', 'node_modules', 'marked', 'lib')] };
     view.webview.html = chatHtml(view.webview, media);
     this.viewSubscriptions = [
       view.webview.onDidReceiveMessage((message: unknown) => { void this.receive(message); }),
@@ -198,6 +198,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await vscode.env.clipboard.writeText(answer.content);
           this.notice = '回答をコピーしました。';
         }
+        return;
+      }
+      if (message.type === 'openMarkdownLink') {
+        await this.auth.requireSession();
+        if (typeof message.text !== 'string') return;
+        const url = new URL(message.text);
+        if (url.protocol !== 'https:' || url.username || url.password) throw new Error('HTTPSのリンクのみ開けます。');
+        await executeExternalAction({ tool: 'open_url', url: url.href }, this.approvals, this.linkReader);
         return;
       }
       if (message.type === 'selectModel') {

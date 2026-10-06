@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 
 export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
   const script = webview.asWebviewUri(vscode.Uri.joinPath(media, 'chat.js'));
+  const markdown = webview.asWebviewUri(vscode.Uri.joinPath(media, 'markdown.js'));
+  const marked = webview.asWebviewUri(vscode.Uri.joinPath(media, '..', 'node_modules', 'marked', 'lib', 'marked.umd.js'));
   const promptHistory = webview.asWebviewUri(vscode.Uri.joinPath(media, 'promptHistory.js'));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(media, 'chat.css'));
   const nonce = randomBytes(16).toString('hex');
@@ -80,5 +82,5 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <p class="footnote">Enter 送信 · Shift＋Enter 改行 · Esc 一時停止</p></footer>
 </div>
 <dialog id="sketch-dialog" aria-labelledby="sketch-title"><h2 id="sketch-title">スケッチ</h2><p class="muted">図や画面のイメージを描いてください。</p><canvas id="sketch-canvas" width="1000" height="620" aria-label="スケッチの描画領域"></canvas><div class="sketch-actions"><button id="sketch-clear" class="text-button" type="button">描き直す</button><button id="sketch-close" class="text-button" type="button">キャンセル</button><button id="sketch-add" class="primary" type="button" disabled>画像として添付</button></div></dialog>
-<script nonce="${nonce}" src="${promptHistory}"></script><script nonce="${nonce}" src="${script}"></script></body></html>`;
+<script nonce="${nonce}" src="${marked}"></script><script nonce="${nonce}" src="${markdown}"></script><script nonce="${nonce}" src="${promptHistory}"></script><script nonce="${nonce}" src="${script}"></script></body></html>`;
 }

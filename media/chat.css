@@ -31,6 +31,26 @@ article { margin: 18px 0; }
 article.user { background: var(--vscode-input-background); padding: 12px 16px; border-radius: 14px; margin-left: 24px; }
 article strong { font-size: 11px; color: var(--vscode-descriptionForeground); font-weight: 500; }
 article pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; margin: 6px 0 0; }
+.markdown-body { line-height: 1.75; overflow-wrap: anywhere; min-width: 0; }
+.markdown-body p { margin: 8px 0; }
+.markdown-body h1 { font-size: 22px; }
+.markdown-body h2 { font-size: 19px; }
+.markdown-body h3 { font-size: 16px; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 14px; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin: 20px 0 8px; line-height: 1.4; font-weight: 600; }
+.markdown-body > :first-child { margin-top: 6px; }
+.markdown-body strong { font: inherit; font-weight: 700; color: inherit; }
+.markdown-body ul, .markdown-body ol { padding-left: 24px; margin: 8px 0; }
+.markdown-body li { margin: 4px 0; }
+.markdown-body li > p { margin: 2px 0; }
+.markdown-body blockquote { margin: 12px 0; padding: 2px 14px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder)); background: var(--vscode-textBlockQuote-background); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--vscode-panel-border); margin: 20px 0; }
+.markdown-body a { color: var(--vscode-textLink-foreground); text-decoration: underline; }
+.markdown-body code { font-family: var(--vscode-editor-font-family, monospace); background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; }
+.markdown-table { overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.markdown-body table { border-collapse: collapse; font-size: inherit; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--vscode-panel-border); padding: 6px 10px; text-align: left; min-width: 70px; }
+.markdown-body th { background: var(--vscode-textCodeBlock-background); font-weight: 600; }
 footer { flex: 0 0 auto; padding-top: 8px; }
 #error { color: var(--vscode-errorForeground); overflow-wrap: anywhere; }
 #status { color: var(--vscode-descriptionForeground); }

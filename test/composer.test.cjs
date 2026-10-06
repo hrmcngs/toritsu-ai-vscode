@@ -7,6 +7,7 @@ const { PromptHistory } = require('../media/promptHistory');
 
 function ui() {
   class Element {
+    constructor(tag = 'div') { this.tagName = tag.toUpperCase(); }
     value = ''; checked = false; hidden = true;
     disabledWrites = []; _disabled = false;
     get disabled() { return this._disabled; }
@@ -36,14 +37,17 @@ function ui() {
   const nodes = new Map(); const events = {}; const sent = [];
   const el = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const sandbox = vm.createContext({
+    URL,
     FileReader: class {
       readAsDataURL(file) { this.result = `data:${file.type};base64,aW1hZ2U=`; this.onload(); }
     },
     acquireVsCodeApi: () => ({ setState() {}, postMessage: message => sent.push(message) }),
-    document: { getElementById: el, createElement: () => new Element(), addEventListener() {} },
+    document: { getElementById: el, createElement: tag => new Element(tag), addEventListener() {} },
     window: { addEventListener: (name, listener) => { events[name] = listener; } }
   });
-  for (const file of ['promptHistory.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../media', file), 'utf8'), sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../node_modules/marked/lib/marked.umd.js'), 'utf8'), sandbox);
+  sandbox.window.marked = sandbox.marked;
+  for (const file of ['markdown.js', 'promptHistory.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../media', file), 'utf8'), sandbox);
   const base = { type: 'state', signedIn: true, busy: false, messages: [], recent: [], inputHistory: [],
     modelSelection: { label: 'test', options: [] }, sources: [], files: [], error: '', account: 'test', activeChatId: 'one' };
   const publish = changes => events.message({ data: { ...base, ...changes } });
@@ -80,6 +84,46 @@ test('画像ファイルがないドロップは理由を表示する', () => {
   const { el, dispatch } = ui();
   dispatch('drop', { dataTransfer: { files: [], items: [] } });
   assert.match(el('error').textContent, /画像ファイルを取得できません/);
+});
+
+test('回答のMarkdownを見出し・太字・引用・リスト・表として表示する', () => {
+  const { el, publish } = ui();
+  publish({ messages: [{ role: 'assistant', content: '## まとめ\n\n**重要**\n\n> 引用\n\n1. 最初\n2. 次\n\n| 項目 | 時間 |\n| --- | --- |\n| 説明 | 3分 |' }] });
+  const body = el('messages').children[0].children[1];
+  assert.equal(body.className, 'markdown-body');
+  assert.equal(body.children.length, 5);
+  assert.equal(body.children[0].tagName, 'H2');
+  assert.equal(body.children[1].children[0].tagName, 'STRONG');
+  assert.equal(body.children[2].tagName, 'BLOCKQUOTE');
+  assert.equal(body.children[3].tagName, 'OL');
+  assert.equal(body.children[0].children[0].textContent, 'まとめ');
+  assert.equal(body.children[1].children[0].children[0].textContent, '重要');
+  assert.equal(body.children[3].children.length, 2);
+  assert.equal(body.children[4].className, 'markdown-table');
+});
+
+test('HTMLを実行せず、危険なMarkdownリンクをクリック可能にしない', () => {
+  const { el, publish, sent } = ui();
+  publish({ messages: [{ role: 'assistant', content: '<script>alert(1)</script>\n\n[危険](javascript:alert%281%29)\n\n[資料](https://example.com/)' }] });
+  const body = el('messages').children[0].children[1];
+  assert.match(body.children[0].textContent, /<script>/);
+  assert.equal(body.children[1].children[0].listeners.click, undefined);
+  body.children[2].children[0].emit('click');
+  assert.equal(sent.at(-1).type, 'openMarkdownLink');
+  assert.equal(sent.at(-1).text, 'https://example.com/');
+});
+
+test('生成途中でもMarkdownを表示し、コードは文字として保持する', () => {
+  const { el, publish } = ui();
+  publish({ busy: true, partialAnswer: '### 途中の回答\n\n**要点**' });
+  const preview = el('messages').children[0].children[2];
+  assert.equal(preview.className, 'markdown-body');
+  assert.equal(preview.children[0].tagName, 'H3');
+  assert.equal(preview.children[1].children[0].tagName, 'STRONG');
+  publish({ messages: [{ role: 'assistant', content: '```html\n<img src=x onerror=alert(1)>\n```' }] });
+  const code = el('messages').children[0].children[1].children[1];
+  assert.equal(code.tagName, 'PRE');
+  assert.match(code.textContent, /<img/);
 });
 
 test('生成中もモデル・承認・プランの設定を操作できる', () => {
