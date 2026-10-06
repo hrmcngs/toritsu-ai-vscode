@@ -37,10 +37,11 @@ interface ProposedApi {
   ChatSessionStatus: { Failed: number; Completed: number; InProgress: number; NeedsInput: number };
 }
 
-export function registerNativeSessions(chat: ChatViewProvider): vscode.Disposable & { readonly status: string } {
+export function registerNativeSessions(chat: ChatViewProvider, enabled = true): vscode.Disposable & { readonly status: string } {
   const api = vscode as unknown as ProposedApi;
   const subscriptions: vscode.Disposable[] = [];
   let status = '未対応: chatSessionsProviderを利用できるVS Codeと提案APIの有効化が必要です。';
+  if (!enabled) return { status: 'Marketplace版ではSessions連携は無効です。通常のチャットと履歴を利用できます。', dispose() {} };
   try {
     if (!api.chat?.createChatSessionItemController || !api.chat?.registerChatSessionContentProvider || !api.ChatResponseTurn2) {
       return { get status() { return status; }, dispose() {} };

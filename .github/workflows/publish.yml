@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'scripts/**'
       - 'media/**'
       - 'package.json'
       - 'package-lock.json'

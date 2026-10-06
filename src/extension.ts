@@ -53,7 +53,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ sess
   } };
   const client: LlmClient = new AuthenticatedClient(auth, readyClient);
   const chat = new ChatViewProvider(context.extensionUri, client, auth, approvals, context.globalState, models, new BrowserHandoff());
-  const nativeSessions = registerNativeSessions(chat);
+  const nativeSessions = registerNativeSessions(chat, context.extension.packageJSON.enabledApiProposals?.includes('chatSessionsProvider') === true);
   context.subscriptions.push(nativeSessions);
   const showChat = () => openChat(() => chat.openFallbackPanel());
   const authorized = async (action: () => Promise<void>) => {

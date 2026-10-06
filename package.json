@@ -394,7 +394,8 @@
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --skip-license --out toritsu-ai.vsix",
+    "package": "node scripts/package.cjs",
+    "package:sessions": "node scripts/package.cjs --sessions",
     "test": "npm run compile && node --test test/*.test.cjs"
   },
   "devDependencies": {

@@ -1,6 +1,7 @@
 .vscode/**
 src/**
 test/**
+scripts/**
 tsconfig.json
 CODE.md
 dist/**/*.map
