@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const original = Module._load;
 let opened = 0;
-let commandCalls = [], configuredCommands, commandError;
+let commandCalls = [], configuredCommands, commandError, commandOutput;
 const workspace = {
   isTrusted: true,
   workspaceFolders: [{ uri: { scheme: 'file', fsPath: __dirname } }],
@@ -12,7 +12,7 @@ const workspace = {
 Module._load = function(name, ...args) {
   if (name === 'vscode') return { workspace, Uri: { parse: url => url }, env: { openExternal: async () => { opened++; return true; } } };
   if (name === 'node:child_process') return { execFile: (command, argv, options, callback) => {
-    commandCalls.push({ command, argv, options }); callback(commandError, 'test output', commandError ? 'test failed' : '');
+    commandCalls.push({ command, argv, options, body: argv.includes('--body-file') ? require('node:fs').readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8') : undefined }); callback(commandError, commandOutput ?? 'test output', commandError ? 'test failed' : '');
   } };
   return original.call(this, name, ...args);
 };
@@ -213,4 +213,71 @@ test('errors return to model and requests stop after three rounds', async () => 
     return block([action]);
   }, async () => { throw new Error('failed'); }), /上限/);
   assert.equal(calls, 3);
+});
+
+test('GitHub Issue操作の結果も長いstdoutと過去の本文を圧縮する', () => {
+  const messages = [
+    { role: 'system', content: 'instructions' },
+    { role: 'user', content: JSON.stringify({ instruction: 'issueのところに追加して', files: [{ text: 'source'.repeat(5000) }] }) },
+    { role: 'assistant', content: block([{ tool: 'run_command', command: 'gh', args: ['issue', 'list', '--json', 'body'] }]) },
+    { role: 'user', content: JSON.stringify({ instruction: 'result', results: [{ tool: 'run_command', command: 'gh', result: {
+      executed: true, success: true, exitCode: 0, stdout: 'issue body'.repeat(2500), stderr: ''
+    } }] }) }
+  ];
+  const compact = compactGitActionRequest(messages);
+  assert.ok(JSON.stringify(compact).length < 6000);
+  assert.equal(compact[1].content, 'issueのところに追加して');
+  const result = JSON.parse(compact.at(-1).content).results[0].result;
+  assert.equal(result.success, true);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /省略あり/);
+  assert.match(result.stdout, /全内容が必要な操作は実行せず追加確認/);
+  assert.equal(messages.length, 4);
+});
+
+test('Issue作成の送信先・本文を検証し許可されていないCLIを拒否する', () => {
+  const action = { tool: 'github.createIssue', args: { repo: 'owner/repo', title: '修正', body: '説明' } };
+  assert.deepEqual(parseExternalActions(block([action])), [action]);
+  for (const args of [{ ...action.args, repo: '--help' }, { ...action.args, title: '' }, { ...action.args, body: 'x'.repeat(60001) }, { ...action.args, title: 'a\nb' }]) {
+    assert.throws(() => parseExternalActions(block([{ ...action, args }])));
+  }
+  configuredCommands = ['git'];
+  try { assert.throws(() => parseExternalActions(block([action])), /GitHub CLI/); }
+  finally { configuredCommands = undefined; }
+});
+
+test('Issueの内容を確認後、本文の改行を保って一度だけ作成しURLを返す', async () => {
+  const action = { tool: 'github.createIssue', args: { repo: 'owner/repo', title: '不具合を修正', body: '概要\n\n`$HOME` と $(test) は文字列\n再現手順\n' } };
+  commandCalls = []; commandOutput = 'https://github.com/owner/repo/issues/42\n';
+  try {
+    const result = await executeExternalAction(action, { approveIssue: async options => {
+      assert.deepEqual(options, action.args); assert.equal(commandCalls.length, 0); return true;
+    } }, {});
+    assert.equal(result.created, true);
+    assert.equal(result.url, 'https://github.com/owner/repo/issues/42');
+    assert.equal(commandCalls.length, 1);
+    assert.equal(commandCalls[0].command, 'gh');
+    assert.deepEqual(commandCalls[0].argv.slice(0, 6), ['issue', 'create', '--repo', 'owner/repo', '--title', '不具合を修正']);
+    assert.equal(commandCalls[0].body, action.args.body);
+    assert.equal(require('node:fs').existsSync(commandCalls[0].options.cwd), false);
+  } finally { commandOutput = undefined; }
+});
+
+test('Issue作成の拒否・キャンセルではコマンドを実行しない', async () => {
+  const action = { tool: 'github.createIssue', args: { repo: 'owner/repo', title: 'Title', body: 'Body' } };
+  commandCalls = [];
+  assert.equal((await executeExternalAction(action, { approveIssue: async () => false }, {})).created, false);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(executeExternalAction(action, {}, {}, controller.signal), /キャンセル/);
+  assert.equal(commandCalls.length, 0);
+});
+
+test('Issue作成に失敗したら成功を報告せず自動再実行しない', async () => {
+  commandCalls = []; commandError = new Error('failed');
+  try {
+    const result = await executeExternalAction({ tool: 'github.createIssue', args: { repo: 'owner/repo', title: 'Title', body: 'Body' } }, { approveIssue: async () => true }, {});
+    assert.equal(result.created, false); assert.equal(result.success, false);
+    assert.equal(commandCalls.length, 1);
+    assert.match(result.stderr, /test failed/);
+  } finally { commandError = undefined; }
 });

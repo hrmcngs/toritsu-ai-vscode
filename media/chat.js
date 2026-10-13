@@ -184,7 +184,8 @@
       el('send').disabled = stopping;
     }
     if (state.paused && state.signedIn) el('send').disabled = false;
-    if (state.backgroundGeneration) el('send').disabled = true;
+    if (state.backgroundGeneration && !state.showingHistory) el('send').disabled = true;
+    if (state.showingHistory && state.paused) el('send').disabled = true;
     for (const button of el('add-menu').querySelectorAll('button')) button.disabled = disabled;
     el('plan-option').disabled = !state.signedIn;
     el('attach').disabled = !state.signedIn || reading;
@@ -292,7 +293,8 @@
       if (!state.signedIn || reading || (state.busy && button.dataset.add !== 'planMode')) return;
       closeAddMenu();
       const action = button.dataset.add;
-      if (action === 'image') el('image-picker').click();
+      if (action === 'pdf') el('pdf-picker').click();
+      else if (action === 'image') el('image-picker').click();
       else if (action === 'link') el('load-links').click();
       else if (action === 'sketch') { resetSketch(); el('sketch-dialog').showModal(); }
       else vscode.postMessage({ type: action });
@@ -338,23 +340,69 @@
     state.busy = true; syncControls();
     vscode.postMessage({ type: 'loadLinks', text: prompt.value });
   });
+  el('pdf-picker').addEventListener('change', event => { void addDroppedFiles([...event.target.files]); event.target.value = ''; });
   el('image-picker').addEventListener('change', event => { void addFiles([...event.target.files]); event.target.value = ''; });
-  window.addEventListener('dragover', event => {
+  async function addDroppedFiles(files) {
+    const pdfs = files.filter(file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+    const pictures = files.filter(file => !pdfs.includes(file));
+    if (pictures.length) await addFiles(pictures);
+    if (!pdfs.length || !state.signedIn || reading) return;
+    if (state.busy) { el('error').textContent = 'PDFは回答の完了後に添付してください。'; return; }
+    reading = true; syncControls();
+    const generation = attachmentGeneration;
+    try {
+      if (pdfs.length > 20) throw new Error('ファイル添付は20件までです。');
+      const documents = [];
+      for (const file of pdfs) {
+        if (!file.size || file.size > 10 * 1024 * 1024) throw new Error('PDFは1件10MBまでです。');
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('PDFを読み込めませんでした。'));
+          reader.readAsDataURL(file.slice(0, file.size, 'application/pdf'));
+        });
+        documents.push({ name: file.name, dataUrl });
+      }
+      if (generation !== attachmentGeneration || !state.signedIn) { reading = false; syncControls(); return; }
+      vscode.postMessage({ type: 'dropPdfs', id: generation, documents });
+    } catch (error) { reading = false; el('error').textContent = error.message; syncControls(); }
+  }
+  function claimDrop(event) {
     event.preventDefault();
+    event.stopPropagation?.();
+  }
+  window.addEventListener('dragenter', event => { claimDrop(event); }, true);
+  window.addEventListener('dragover', event => {
+    claimDrop(event);
     if (event.dataTransfer) event.dataTransfer.dropEffect = state.signedIn && !reading ? 'copy' : 'none';
     if (state.signedIn && !reading) el('form').classList.add('drag-over');
-  });
+  }, true);
   window.addEventListener('dragleave', event => { if (!event.relatedTarget) el('form').classList.remove('drag-over'); });
   window.addEventListener('drop', event => {
-    event.preventDefault(); el('form').classList.remove('drag-over');
+    claimDrop(event); el('form').classList.remove('drag-over');
     const transfer = event.dataTransfer;
     const files = [...(transfer?.files ?? [])];
     if (!files.length) for (const item of transfer?.items ?? []) {
       if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
     }
+    if (!files.length && transfer?.getData) {
+      let uris = [];
+      try {
+        const resources = transfer.getData('ResourceURLs');
+        if (resources) uris = JSON.parse(resources);
+      } catch { /* Fall back to the standard URI list. */ }
+      if (!Array.isArray(uris) || !uris.length) uris = transfer.getData('text/uri-list').split(/\r?\n/).filter(line => line && !line.startsWith('#'));
+      uris = uris.filter(uri => typeof uri === 'string' && /^file:\/\//i.test(uri));
+      if (uris.length) {
+        if (!state.signedIn || reading) return;
+        reading = true; syncControls();
+        vscode.postMessage({ type: uris.every(uri => /\.pdf$/i.test(new URL(uri).pathname)) ? 'dropPdfs' : 'dropImages', id: attachmentGeneration, uris });
+        return;
+      }
+    }
     if (!files.length) { el('error').textContent = '画像ファイルを取得できませんでした。画像をPCに保存してドロップするか、画像選択から添付してください。'; return; }
-    void addFiles(files);
-  });
+    void addDroppedFiles(files);
+  }, true);
   window.addEventListener('paste', event => {
     const files = [...(event.clipboardData?.files ?? [])];
     if (files.length) { event.preventDefault(); void addFiles(files); }
@@ -428,13 +476,13 @@
   });
   el('form').addEventListener('submit', event => {
     event.preventDefault();
-    if (state.backgroundGeneration) return;
+    if (state.backgroundGeneration && !state.showingHistory || state.showingHistory && state.paused) return;
     if (state.paused && !prompt.value.trim() && !images.length) {
       vscode.postMessage({ type: 'resume' }); return;
     }
     if (state.signedIn && state.busy && !state.paused && !stopping && !state.browserMode && !state.changingModel && !reading) {
       if ((!prompt.value.trim() && !images.length) || (state.pendingPrompts?.length ?? 0) >= 10) return;
-      vscode.postMessage({ type: 'queuePrompt', text: prompt.value, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
+      vscode.postMessage({ type: 'queuePrompt', text: prompt.value, newChat: !!state.showingHistory, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) });
       prompt.value = ''; resetImages(); draftDuringGeneration = false; inputHistory.reset(); resizePrompt(); prompt.focus();
       return;
     }
@@ -445,7 +493,8 @@
     draftDuringGeneration = false;
     inputHistory.reset();
     syncControls(); closeApprovalMenu(); closeModelMenu(); closeAddMenu();
-    const request = { type: 'send', text: prompt.value, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) };
+    const request = { type: 'send', text: prompt.value, newChat: !!state.showingHistory, includeContext: context.checked, images: images.map(({ name, dataUrl }) => ({ name, dataUrl })) };
+    if (state.showingHistory) { state.showingHistory = false; state.messages = []; }
     if (!state.browserMode) {
       const attachments = [...images.map(image => image.name), ...(state.files ?? []).map(file => file.name)];
       submission = { input: prompt.value, images: [...images], text: (prompt.value.trim() || (images.length ? '添付画像について説明してください。' : '参考資料を基に要点をまとめてください。')) + (attachments.length ? `\n\n添付: ${attachments.join('、')}` : ''), status: 'sending' };
@@ -486,6 +535,24 @@
     return minutes < 1 ? '今' : minutes < 60 ? `${minutes}分前` : minutes < 1440 ? `${Math.floor(minutes / 60)}時間前` : `${Math.floor(minutes / 1440)}日前`;
   }
   window.addEventListener('message', event => {
+    if (event.data.type === 'droppedPdfs') {
+      reading = false;
+      if (event.data.id === attachmentGeneration && state.signedIn) el('error').textContent = event.data.error || '';
+      syncControls(); return;
+    }
+    if (event.data.type === 'droppedImages') {
+      reading = false;
+      if (event.data.id === attachmentGeneration && state.signedIn) {
+        if (event.data.error) el('error').textContent = event.data.error;
+        else {
+          const added = event.data.images.map(image => ({ ...image, size: Math.floor(image.dataUrl.split(',')[1].length * 3 / 4) }));
+          if (images.length + added.length > 4) el('error').textContent = '画像は4枚まで添付できます。';
+          else if ([...images, ...added].reduce((sum, image) => sum + image.size, 0) > totalLimit) el('error').textContent = '添付画像の合計は10MBまでです。';
+          else { images.push(...added); el('error').textContent = ''; renderImages(); }
+        }
+      }
+      syncControls(); return;
+    }
     if (event.data.type === 'queuedPromptStarted') {
       submission = { input: event.data.text, text: event.data.text, status: 'sending' };
       pendingSubmission = true; stopping = false;
@@ -496,6 +563,10 @@
     const previousChatId = state.activeChatId;
     const wasPaused = state.paused;
     state = event.data;
+    if (state.preserveInput && submission && !prompt.value) {
+      prompt.value = submission.input;
+      prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+    }
     if (state.paused && state.pausedRequest && !submission) {
       const request = state.pausedRequest;
       submission = { input: request.text, text: request.text, status: 'paused', images: request.images.map(image => ({ ...image, size: Math.floor(image.dataUrl.split(',')[1].length * 3 / 4) })) };
@@ -542,12 +613,16 @@
     el('file-attachments').replaceChildren();
     for (const file of state.files ?? []) {
       const card = document.createElement('details'); card.className = 'source-card'; card.dataset.id = file.id; card.open = openFiles.has(file.id);
-      const title = document.createElement('summary'); title.textContent = `${file.name} · ${file.text.length.toLocaleString()}文字`;
+      const title = document.createElement('summary');
+      const label = document.createElement('span'); label.textContent = `${file.name}${file.truncated ? '（抜粋）' : ''} · ${file.text.length.toLocaleString()}文字`;
+      title.append(label);
       const path = document.createElement('p'); path.className = 'source-url'; path.textContent = file.path;
       const content = document.createElement('pre'); content.textContent = file.text;
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = '添付を外す'; remove.disabled = state.busy;
-      remove.addEventListener('click', () => vscode.postMessage({ type: 'removeFile', id: file.id }));
-      card.append(title, path, content, remove); el('file-attachments').append(card);
+      remove.setAttribute('aria-label', `${file.name}の添付を外す`);
+      remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation?.(); vscode.postMessage({ type: 'removeFile', id: file.id }); });
+      title.append(remove);
+      card.append(title, path, content); el('file-attachments').append(card);
     }
     const openSources = new Set([...el('sources').querySelectorAll('details[open]')].map(item => item.dataset.url));
     el('sources').replaceChildren();
@@ -666,7 +741,7 @@
     }
     el('error').textContent = state.error;
     if (!state.signedIn || (state.clearInput && !wasStopping)) {
-      if (!state.signedIn || !state.preserveDraft || !draftDuringGeneration) { prompt.value = ''; draftDuringGeneration = false; }
+      if (state.clearInput && !state.preserveInput && (!state.preserveDraft || !draftDuringGeneration)) { prompt.value = ''; draftDuringGeneration = false; }
       context.checked = false;
       if (!state.signedIn || !state.preserveDraft) resetImages();
       inputHistory.reset(); pendingSubmission = false;

@@ -41,16 +41,19 @@ export function chatHtml(webview: vscode.Webview, media: vscode.Uri): string {
 <div id="sources" aria-label="参考リンク"></div>
 <div id="attachments" aria-label="添付画像"></div>
 <p id="image-help" class="attachment-hint" hidden>画像対応モデルが必要です。画像本体は今回の送信だけに含まれます。</p>
+<p class="attachment-hint">PDF・画像はShiftを押しながらドロップ、または「＋」から添付</p>
 <textarea id="prompt" rows="3" placeholder="作りたいものや変更したいことを入力…" disabled></textarea>
+<input id="pdf-picker" type="file" accept="application/pdf,.pdf" multiple hidden>
 <input id="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
 <div class="composer-bottom"><div class="composer-actions">
 <button id="attach" type="button" class="icon-button" title="追加メニュー" aria-label="追加メニュー" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu" disabled>${icon('M12 5v14M5 12h14')}</button>
 <div id="add-menu" class="add-menu" role="menu" aria-label="追加" hidden>
 <p class="add-heading">追加</p>
 <button type="button" role="menuitem" data-add="generationPath"><span>生成先のパス<small>指定した場所にフォルダーごと作成</small></span></button>
-<button type="button" role="menuitem" data-add="attachFiles">${icon('M8 12v5a4 4 0 0 0 8 0V7a3 3 0 0 0-6 0v10a1 1 0 0 0 2 0V8')}<span>ファイル<small>コードや資料を添付</small></span></button>
+<button type="button" role="menuitem" data-add="attachFiles">${icon('M8 12v5a4 4 0 0 0 8 0V7a3 3 0 0 0-6 0v10a1 1 0 0 0 2 0V8')}<span>ファイル<small>コード・PDF・資料を添付</small></span></button>
 <button type="button" role="menuitem" data-add="attachFolder">${icon('M3 6h7l2 3h9v11H3Z')}<span>フォルダー<small>中のテキストをまとめて添付</small></span></button>
-<button type="button" role="menuitem" data-add="image">${icon('M3 3h18v18H3ZM3 17l5-5 4 4 4-6 5 7M8 7h.01')}<span>画像<small>画像を選択・ドロップ</small></span></button>
+<button type="button" role="menuitem" data-add="pdf"><span>PDF<small>フォルダーを開いてPDFを選択</small></span></button>
+<button type="button" role="menuitem" data-add="image">${icon('M3 3h18v18H3ZM3 17l5-5 4 4 4-6 5 7M8 7h.01')}<span>画像<small>画像を選択・Shift＋ドロップ</small></span></button>
 <button type="button" role="menuitem" data-add="link">${icon('M10 14l4-4M8 16l-2 2a4 4 0 0 1-5-5l4-4a4 4 0 0 1 5 0m4-1 2-2a4 4 0 0 1 5 5l-4 4a4 4 0 0 1-5 0')}<span>リンク<small>WebページやPDFを読み込む</small></span></button>
 <button type="button" role="menuitem" data-add="goal">${icon('M21 12a9 9 0 1 1-9-9M17 12a5 5 0 1 1-5-5m0 5 9-9m-5 0h5v5')}<span>目標<small>この会話で達成したいこと</small></span></button>
 <button id="plan-option" type="button" role="menuitemcheckbox" aria-checked="false" data-add="planMode">${icon('M9 18h6m-5 3h4M8 15a7 7 0 1 1 8 0l-1 3H9Z')}<span>プランモード<small id="plan-description">作る前に手順を相談</small></span><span id="plan-check" hidden>✓</span></button>

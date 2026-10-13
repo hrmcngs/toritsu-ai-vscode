@@ -185,6 +185,10 @@ article .generated-file pre { margin: 0; padding: 12px 14px; max-height: 340px; 
 textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; }
 .composer-bottom { flex-wrap: nowrap; gap: 4px; }
 .composer-actions { flex-wrap: nowrap; min-width: 0; }
+.composer-actions > .icon-button { flex-shrink: 0; }
+.approval-control { min-width: 0; }
+#approval-toggle { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.app, footer, .composer { min-width: 0; }
 .send-tools { gap: 4px; min-width: 0; }
 #model { max-width: clamp(75px, 28vw, 180px); }
 #approval-toggle { white-space: nowrap; }
@@ -196,3 +200,13 @@ textarea { resize: none; min-height: 60px; max-height: 220px; overflow-y: auto; 
 #context-chip { margin-bottom: 8px; }
 #context-option[aria-checked=true] { background: var(--vscode-list-inactiveSelectionBackground); }
 @media (max-width: 280px) { #model { max-width: 72px; } #approval-toggle { font-size: 10px; padding: 4px; } .composer { padding: 8px; } }
+@media (max-width: 360px) {
+  .composer-bottom { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .composer-actions { width: 100%; }
+  .send-tools { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .model-control { min-width: 0; flex: 1 1 60px; }
+  #model { min-width: 0; max-width: 100%; width: 100%; text-align: right; }
+  .send-tools > .icon-button, #send, #cancel { flex: 0 0 34px; }
+}
+
+#file-attachments summary .text-button { float: right; margin-left: 8px; padding: 0 4px; }

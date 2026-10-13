@@ -2,8 +2,9 @@ import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { parsePdf } from './pdfParser';
 
-export interface TextAttachment { id: string; name: string; path: string; text: string }
+export interface TextAttachment { id: string; name: string; path: string; text: string; truncated?: boolean }
 export const MAX_FILES = 20;
 export const MAX_FILE_CHARS = 80000;
 const SKIP = new Set(['node_modules', 'dist', 'build', 'coverage', 'vendor', '__pycache__']);
@@ -59,11 +60,13 @@ export async function collectAttachments(paths: readonly string[], signal?: Abor
       }
       return;
     }
-    if (!info.isFile() || info.size > 100 * 1024) { skipped++; return; }
+    const pdf = /\.pdf$/i.test(canonical);
+    const maxBytes = pdf ? 10 * 1024 * 1024 : 100 * 1024;
+    if (!info.isFile() || info.size > maxBytes) { skipped++; return; }
     const handle = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       if (!(await handle.stat()).isFile()) { skipped++; return; }
-      const bytes = Buffer.alloc(100 * 1024 + 1);
+      const bytes = Buffer.alloc(Math.min(info.size, maxBytes) + 1);
       let length = 0;
       while (length < bytes.length) {
         check();
@@ -71,13 +74,24 @@ export async function collectAttachments(paths: readonly string[], signal?: Abor
         if (!result.bytesRead) break;
         length += result.bytesRead;
       }
-      if (length > 100 * 1024 || bytes.subarray(0, length).includes(0)) { skipped++; return; }
+      if (length > maxBytes || (!pdf && bytes.subarray(0, length).includes(0))) { skipped++; return; }
       let text: string;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length)); }
-      catch { skipped++; return; }
+      let truncated = false;
+      if (pdf) {
+        try { ({ text, truncated } = await parsePdf(bytes.subarray(0, length), signal)); }
+        catch (error) {
+          check();
+          if (depth > 0) { skipped++; return; }
+          throw new Error(`${basename(canonical)}: ${error instanceof Error ? error.message : 'PDFを解析できませんでした。'}`);
+        }
+      } else {
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length)); }
+        catch { skipped++; return; }
+      }
+      check();
       if (chars + text.length > MAX_FILE_CHARS) { skipped++; return; }
       chars += text.length;
-      files.push({ id: randomUUID(), name: basename(canonical), path: canonical, text });
+      files.push({ id: randomUUID(), name: basename(canonical), path: canonical, text, ...(truncated ? { truncated: true } : {}) });
     } finally { await handle.close(); }
   };
   for (const path of paths.slice(0, MAX_FILES)) await visit(path, 0);

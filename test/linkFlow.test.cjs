@@ -29,6 +29,36 @@ function setup(t, complete, storage) {
   return { provider, state: () => state, logout: () => { auth.session = undefined; listener(); } };
 }
 
+test('履歴から送信すると元の会話を保持して履歴なしの新しい会話を作る', async t => {
+  const requests = [];
+  const { provider, state } = setup(t, async messages => { requests.push(messages); return '回答'; });
+  await provider.receive({ type: 'send', text: '以前の話題' });
+  const originalId = state().activeChatId;
+  provider.showHistory();
+  await provider.receive({ type: 'send', text: '新しい話題', newChat: true });
+  assert.notEqual(state().activeChatId, originalId);
+  assert.equal(state().messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(requests.at(-1)), /以前の話題/);
+  assert.equal(provider.history.messagesFor(originalId).length, 2);
+});
+
+test('生成中の履歴から新しい依頼を待機させても元の回答と混ざらない', async t => {
+  let finish;
+  let calls = 0;
+  const { provider, state } = setup(t, async () => ++calls === 1 ? new Promise(resolve => { finish = resolve; }) : '新しい回答');
+  const active = provider.receive({ type: 'send', text: '最初の相談' });
+  while (!finish) await new Promise(resolve => setImmediate(resolve));
+  const firstId = state().activeChatId;
+  provider.showHistory();
+  await provider.receive({ type: 'queuePrompt', text: '別の相談', newChat: true });
+  const nextId = state().activeChatId;
+  assert.notEqual(firstId, nextId);
+  finish('最初の回答'); await active;
+  assert.match(provider.history.messagesFor(firstId)[0].content, /最初の相談/);
+  assert.match(provider.history.messagesFor(nextId)[0].content, /別の相談/);
+  assert.equal(provider.history.messagesFor(nextId).length, 2);
+});
+
 test('生成を止めずにモデルと次回のプランモードを変更できる', async t => {
   let finish;
   let selected;
@@ -433,7 +463,7 @@ test('チャットのキー登録後に接続先やモデルの追加ダイア�
   assert.equal(registrations, 1); assert.equal(state().error, ''); assert.equal(state().signedIn, true);
 });
 
-test('編集依頼では手動添付なしでワークスペースの実コードをAPIに送る',async t=>{
+test('編集依頼では明示的に添付したワークスペースの実コードをAPIに送る',async t=>{
  const fs=require('node:fs/promises');const path=require('node:path');
  const root=await fs.mkdtemp(path.join(require('node:os').tmpdir(),'toritsu-flow-'));
  t.after(async()=>{delete workspace.workspaceFolders;await fs.rm(root,{recursive:true,force:true});});
@@ -441,9 +471,54 @@ test('編集依頼では手動添付なしでワークスペースの実コー�
  workspace.workspaceFolders=[{uri:{scheme:'file',fsPath:root}}];
  let request;
  const {provider}=setup(t,async messages=>{request=messages;return 'response';});
+ provider.files = (await require('../dist/services/fileAttachments').collectAttachments([path.join(root, 'index.html')])).files;
  await provider.receive({type:'send',text:'ページにダークモードを追加して'});
  const payload=JSON.parse(request.at(-1).content);
  assert.equal(payload.files[0].text,'<html>existing page</html>');
  assert.equal(payload.outputDirectory,root);
  assert.match(request[0].content,/実コードを修正/);
+});
+
+test('PDFドロップの解析エラーを後続の状態更新で消さない', async t => {
+  const { provider, state } = setup(t, async () => '回答');
+  await provider.receive({ type: 'dropPdfs', id: 1, documents: [{ name: 'bad.pdf', dataUrl: 'invalid' }] });
+  assert.equal(state().type, 'state');
+  assert.match(state().error, /PDFデータが不正/);
+  assert.equal(state().loadingFiles, false);
+  assert.equal(state().busy, false);
+});
+
+test('添付ファイルの取り消しを状態に反映する', async t => {
+  const { provider, state } = setup(t, async () => '回答');
+  provider.files = [{ id: 'one', name: '数学.pdf', path: 'drop:one', text: '本文' }];
+  await provider.receive({ type: 'removeFile', id: 'one' });
+  assert.deepEqual(state().files, []);
+});
+
+test('APIキー変更の通知では入力本文の保持を指定する', t => {
+  const { state, logout } = setup(t, async () => 'unused');
+  logout();
+  assert.equal(state().clearInput, true);
+  assert.equal(state().preserveInput, true);
+});
+
+test('コード修正の依頼でも開いたファイルやワークスペースを自動添付しない', async t => {
+  const fs = require('node:fs/promises');
+  const path = require('node:path');
+  const os = require('node:os');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'toritsu-explicit-attachments-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'index.html'), 'DO_NOT_ATTACH_WORKSPACE');
+  await fs.writeFile(path.join(root, 'main.js'), 'DO_NOT_ATTACH_EDITOR');
+  const originalFolders = workspace.workspaceFolders;
+  workspace.workspaceFolders = [{ uri: { scheme: 'file', fsPath: root } }];
+  t.after(() => { workspace.workspaceFolders = originalFolders; });
+  const requests = [];
+  const { provider, state } = setup(t, async messages => { requests.push(messages); return '回答'; });
+  provider.editor = { document: { uri: { scheme: 'file', fsPath: path.join(root, 'main.js') }, isClosed: false } };
+  await provider.receive({ type: 'send', text: '練習問題を追加して', includeContext: false });
+  assert.equal(requests.length, 1);
+  assert.doesNotMatch(JSON.stringify(requests[0]), /DO_NOT_ATTACH_WORKSPACE|DO_NOT_ATTACH_EDITOR/);
+  assert.deepEqual(JSON.parse(requests[0].at(-1).content).files, []);
+  assert.deepEqual(state().files, []);
 });

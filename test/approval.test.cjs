@@ -97,3 +97,17 @@ test('チャットの承認表示を優先し、毎回確認だけファイル�
   mode = 'full'; await approvals.approveCreate('/project', [{ path: 'a.txt', content: '' }]);
   assert.equal(requests, 1); assert.equal(prompts, 0); subscription.dispose();
 });
+
+test('Issue作成では送信先・タイトル・本文を承認画面に表示する', async () => {
+  mode = 'auto'; externalOptions.autoExternalAutoApproval = false;
+  const approvals = new ApprovalService();
+  let details;
+  approvals.setPresenter(async value => { details = value; return true; });
+  const issue = { repo: 'owner/repo', title: '不具合', body: '概要\n再現手順' };
+  assert.equal(await approvals.approveIssue(issue), true);
+  assert.match(details.detail, /owner\/repo/);
+  assert.match(details.detail, /不具合/);
+  assert.equal(details.files[0].content, issue.body);
+  const controller = new AbortController(); controller.abort();
+  assert.equal(await approvals.approveIssue(issue, controller.signal), false);
+});

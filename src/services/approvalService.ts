@@ -50,6 +50,13 @@ export class ApprovalService {
     await vscode.workspace.getConfiguration('toritsuAI').update('approvalMode', value, vscode.ConfigurationTarget.Global);
   }
 
+  async approveIssue(options: { repo: string; title: string; body: string }, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (this.externalAutoApproval) return true;
+    return this.confirm({ title: 'GitHub Issueを作成', detail: `送信先: ${options.repo}\nタイトル: ${options.title}`,
+      files: [{ path: 'Issue本文', content: options.body }] }, 'Issueを作成', signal);
+  }
+
   async approveSend(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw new Error('処理をキャンセルしました。');
     if (this.mode === 'ask') {

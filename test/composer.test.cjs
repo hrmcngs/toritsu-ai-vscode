@@ -55,6 +55,17 @@ function ui() {
   return { el, sent, publish, message: data => events.message({ data }), dispatch: (name, data) => events[name]({ preventDefault() {}, ...data }) };
 }
 
+test('履歴画面からの入力は新しい会話として送信する', () => {
+  const { el, sent, publish } = ui();
+  publish({ showingHistory: true, messages: [{ role: 'user', content: '古い会話' }] });
+  el('prompt').value = '新しい相談'; el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'send'); assert.equal(sent.at(-1).newChat, true);
+  publish({ showingHistory: true, busy: true, backgroundGeneration: true });
+  assert.equal(el('send').disabled, false);
+  el('prompt').value = '別の相談'; el('form').emit('submit');
+  assert.equal(sent.at(-1).type, 'queuePrompt'); assert.equal(sent.at(-1).newChat, true);
+});
+
 test('生成の更新で履歴を隠さず、元のチャットへ戻って待機送信できる', () => {
   const { el, sent, publish } = ui();
   const recent = [{ id: 'one', title: '生成中の会話', updatedAt: Date.now() }];
@@ -430,4 +441,99 @@ test('授業用APIはサーバー側モデルの説明を表示し無効な切�
  assert.equal(el('custom-model').hidden,true);assert.equal(el('configure-models').hidden,true);
  publish({modelSelection:{label:'chosen',serverManaged:false,options:[]}});
  assert.equal(el('custom-model').hidden,false);
+});
+
+test('VS CodeのファイルURIドロップをホストで読み込み画像として送信する', () => {
+  const { dispatch, sent, message, el } = ui();
+  let stopped = false;
+  dispatch('drop', { stopPropagation() { stopped = true; }, dataTransfer: {
+    files: [], items: [], getData: type => type === 'ResourceURLs' ? JSON.stringify(['file:///tmp/photo.png']) : ''
+  } });
+  assert.equal(stopped, true);
+  assert.equal(sent.at(-1).type, 'dropImages');
+  const id = sent.at(-1).id;
+  message({ type: 'droppedImages', id, images: [{ name: 'photo.png', dataUrl: 'data:image/png;base64,aW1hZ2U=' }] });
+  assert.equal(el('attachments').children.length, 1);
+  el('form').emit('submit');
+  assert.equal(sent.at(-1).images[0].name, 'photo.png');
+});
+
+test('URIリストに対応し会話変更後に届いた画像は破棄する', () => {
+  const { dispatch, sent, message, el, publish } = ui();
+  dispatch('drop', { dataTransfer: { files: [], getData: type => type === 'text/uri-list' ? '# comment\r\nfile:///tmp/photo.png' : '' } });
+  assert.equal(sent.at(-1).type, 'dropImages');
+  const id = sent.at(-1).id;
+  publish({ activeChatId: 'two', clearInput: true });
+  message({ type: 'droppedImages', id, images: [{ name: 'photo.png', dataUrl: 'data:image/png;base64,aW1hZ2U=' }] });
+  assert.equal(el('attachments').children.length, 0);
+});
+
+test('PDFのドロップを画像処理に渡さず本文抽出へ送る', async () => {
+  const { dispatch, sent, message, el } = ui();
+  dispatch('drop', { dataTransfer: { files: [{ name: '数学Ａ.pdf', type: 'application/pdf', size: 10,
+    slice: () => ({ type: 'application/pdf' }) }] } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.at(-1).type, 'dropPdfs');
+  assert.equal(sent.at(-1).documents[0].name, '数学Ａ.pdf');
+  assert.match(sent.at(-1).documents[0].dataUrl, /^data:application\/pdf;/);
+  message({ type: 'droppedPdfs', id: sent.at(-1).id });
+  assert.equal(el('attachments').children.length, 0);
+});
+
+test('PDFのURIをドロップするとPDF添付へ送る', () => {
+  const { dispatch, sent } = ui();
+  dispatch('drop', { dataTransfer: { files: [], getData: type => type === 'ResourceURLs' ? JSON.stringify(['file:///tmp/math.pdf']) : '' } });
+  assert.equal(sent.at(-1).type, 'dropPdfs');
+});
+
+test('PDF選択から添付し、閉じた添付カードから取り消せる', async () => {
+  const { el, sent, publish } = ui();
+  el('pdf-picker').emit('change', { target: { files: [{ name: '数学.pdf', type: 'application/pdf', size: 10, slice: () => ({ type: 'application/pdf' }) }], value: 'selected' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.at(-1).type, 'dropPdfs');
+  publish({ files: [{ id: 'pdf-one', name: '数学.pdf', path: 'drop:pdf-one', text: '資料の内容' }] });
+  const card = el('file-attachments').children[0];
+  assert.equal(card.open, false);
+  const summary = card.children[0];
+  const remove = summary.children.find(child => child.tagName === 'BUTTON');
+  assert.ok(remove);
+  const event = remove.emit('click');
+  assert.equal(event.prevented, true);
+  assert.equal(sent.at(-1).type, 'removeFile');
+  assert.equal(sent.at(-1).id, 'pdf-one');
+});
+
+test('APIキーの入れ直し中も入力途中のメッセージを保持する', () => {
+  const { el, publish } = ui();
+  const text = 'このPDFを使って\n試験の練習問題を作って';
+  el('prompt').value = text;
+  publish({ signedIn: false, clearInput: true, preserveInput: true });
+  assert.equal(el('prompt').value, text);
+  publish({ signedIn: false, signingIn: true });
+  assert.equal(el('prompt').value, text);
+  publish({ clearInput: true, preserveInput: true });
+  assert.equal(el('prompt').value, text);
+  assert.equal(el('prompt').disabled, false);
+});
+
+test('APIキー変更で中断した送信文を戻し、新しい下書きは上書きしない', () => {
+  const { el, publish } = ui();
+  el('prompt').value = '送信しようとしていたメッセージ';
+  el('form').emit('submit');
+  assert.equal(el('prompt').value, '');
+  publish({ signedIn: false, clearInput: true, preserveInput: true });
+  assert.equal(el('prompt').value, '送信しようとしていたメッセージ');
+  publish({ clearInput: true, preserveInput: true });
+  el('form').emit('submit');
+  el('prompt').value = '次の下書き';
+  publish({ signedIn: false, clearInput: true, preserveInput: true });
+  assert.equal(el('prompt').value, '次の下書き');
+});
+
+test('新しい会話を開始するとAPIキー変更で保持した下書きを消せる', () => {
+  const { el, publish } = ui();
+  el('prompt').value = '下書き';
+  publish({ clearInput: true, preserveInput: true });
+  publish({ clearInput: true, activeChatId: 'new' });
+  assert.equal(el('prompt').value, '');
 });

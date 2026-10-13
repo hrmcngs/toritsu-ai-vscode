@@ -1,11 +1,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
-let repositories, decision, onConfirm;
+let repositories, decision, onConfirm, attribution = {};
 const original = Module._load;
 Module._load = function(name, ...args) {
   if (name === 'vscode') return {
-    workspace: { isTrusted: true, fs: { stat: async () => ({ size: 3 }), readFile: async () => Buffer.from('new') } },
+    workspace: { isTrusted: true, getConfiguration: () => ({ get: (key, fallback) => attribution[key] ?? fallback }), fs: { stat: async () => ({ size: 3 }), readFile: async () => Buffer.from('new') } },
     extensions: { getExtension: () => ({ activate: async () => ({ getAPI: () => ({ repositories, getRepository: () => null }) }) }) },
     ProgressLocation: { Notification: 1 },
     window: {
@@ -20,7 +20,7 @@ const { generateCommitMessage, commitAndPush } = require('../dist/commands/sourc
 const { executeGitChatAction, validateGitRemote } = require('../dist/services/gitChatTools');
 Module._load = original;
 function setup() {
-  decision = 'コミットしてpush'; onConfirm = undefined;
+  decision = 'コミットしてpush'; onConfirm = undefined; attribution = {};
   const calls = [];
   const uri = path => ({ fsPath: path, toString: () => 'file://' + path });
   const repository = {
@@ -43,6 +43,16 @@ test('message generation uses staged changes and fills the existing SCM input', 
     return '変更内容を修正';
   } }, { rootUri: repository.rootUri });
   assert.equal(repository.inputBox.value, '変更内容を修正');
+});
+
+test('共同作成者を生成メッセージと実コミットへ一度だけ付ける', async () => {
+  const { repository, calls } = setup();
+  attribution = { 'commitAttribution.email': 'bot@example.com' };
+  await generateCommitMessage({ complete: async () => '変更を修正' });
+  assert.match(repository.inputBox.value, /Co-authored-by: Toritsu AI <bot@example.com>/);
+  await commitAndPush();
+  const message = calls.find(call => call[0] === 'commit')[1];
+  assert.equal((message.match(/Co-authored-by:/g) ?? []).length, 1);
 });
 test('generation does not overwrite a message edited during the request', async () => {
   const { repository } = setup();

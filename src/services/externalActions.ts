@@ -3,8 +3,9 @@ import { Message } from '../types/ai';
 import { ApprovalService } from './approvalService';
 import { LinkReader, normalizeLink } from './linkReader';
 import { execFile } from 'node:child_process';
-import { realpath } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, relative, sep } from 'node:path';
+import { realpath, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, relative, sep, join } from 'node:path';
 import { collectAttachments, readFolder } from './fileAttachments';
 import { createGeneratedFiles, ExistingFilesNeedEditing, parseGeneratedFiles } from './generatedFiles';
 import { DEFAULT_ALLOWED_COMMANDS, validCommandName } from './commandPolicy';
@@ -40,7 +41,7 @@ export function compactGitActionRequest(messages: readonly Message[]): readonly 
   let payload: { instruction: string; results: (ActionResult & { command?: string })[] };
   try { payload = JSON.parse(last.content); } catch { return messages; }
   if (!Array.isArray(payload.results) || !payload.results.length || !payload.results.every(entry =>
-    entry.tool.startsWith('git.') || entry.tool === 'github.createRepo' || (entry.tool === 'run_command' && entry.command === 'git'))) return messages;
+    entry.tool.startsWith('git.') || entry.tool === 'github.createRepo' || entry.tool === 'github.createIssue' || (entry.tool === 'run_command' && (entry.command === 'git' || entry.command === 'gh')))) return messages;
   const preview = (value: string, limit: number) => value.length > limit ? value.slice(0, limit) + '\n[省略あり。全内容が必要な操作は実行せず追加確認してください]' : value;
   const compact = (value: unknown): unknown => {
     if (typeof value === 'string') return preview(value, 2000);
@@ -66,8 +67,17 @@ export type ExternalAction = { tool: 'open_url' | 'read_public_url'; url: string
   | { tool: 'folder.read'; path: string }
   | { tool: 'file.write'; path: string; content: string; original?: string }
   | { tool: 'run_command'; command: string; args: string[]; cwd?: string }
+  | { tool: 'github.createIssue'; args: IssueOptions }
   | { tool: 'github.createRepo'; args: RepositoryOptions; cwd?: string } | GitChatAction;
 
+export interface IssueOptions { repo: string; title: string; body: string }
+function issueOptions(value: unknown): IssueOptions {
+  const args = value as Partial<IssueOptions> | null;
+  if (!args || typeof args.repo !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9_][a-zA-Z0-9._-]{0,99}$/.test(args.repo) ||
+    typeof args.title !== 'string' || !args.title.trim() || args.title.length > 256 || /[\r\n\0]/.test(args.title) ||
+    typeof args.body !== 'string' || !args.body.trim() || args.body.length > 60000 || args.body.includes('\0')) throw new Error('Issueの送信先（OWNER/REPO）・タイトル・本文を指定してください。');
+  return { repo: args.repo, title: args.title, body: args.body };
+}
 function repositoryOptions(value: unknown): RepositoryOptions {
   const args = value as Partial<RepositoryOptions> | null;
   if (!args || typeof args.name !== 'string' || !/^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,99}$/.test(args.name) ||
@@ -100,6 +110,10 @@ export function parseExternalActions(answer: string): ExternalAction[] {
       if (value.tool === 'git.setRemote') return { tool: value.tool, args: validateGitRemote(value.args?.name, value.args?.url), cwd: value.cwd };
       return { tool: value.tool, cwd: value.cwd };
     }
+    if (value?.tool === 'github.createIssue') {
+      if (!allowedCommands().includes('gh')) throw new Error('GitHub CLIが設定で許可されていません。');
+      return { tool: 'github.createIssue', args: issueOptions(value.args) };
+    }
     if (value?.tool === 'github.createRepo') {
       if (!allowedCommands().includes('gh')) throw new Error('GitHub CLIが設定で許可されていません。');
       if (value.cwd !== undefined && (typeof value.cwd !== 'string' || !isAbsolute(value.cwd))) throw new Error('実行先は絶対パスで指定してください。');
@@ -119,6 +133,28 @@ export function parseExternalActions(answer: string): ExternalAction[] {
 }
 export async function executeExternalAction(action: ExternalAction, approvals: ApprovalService, reader: LinkReader, signal?: AbortSignal): Promise<unknown> {
   if (signal?.aborted) throw new Error('操作をキャンセルしました。');
+  if (action.tool === 'github.createIssue') {
+    const options = issueOptions(action.args);
+    if (!allowedCommands().includes('gh')) throw new Error('GitHub CLIが設定で許可されていません。');
+    if (!vscode.workspace.isTrusted) throw new Error('信頼されたワークスペースで実行してください。');
+    if (!await approvals.approveIssue(options, signal)) return { executed: false, created: false, reason: 'ユーザーがIssueの作成を許可しませんでした。' };
+    if (signal?.aborted) throw new Error('操作をキャンセルしました。');
+    const temporary = await mkdtemp(join(tmpdir(), 'toritsu-issue-'));
+    try {
+      const bodyPath = join(temporary, 'body.md');
+      await writeFile(bodyPath, options.body, { mode: 0o600 });
+      const args = ['issue', 'create', '--repo', options.repo, '--title', options.title, '--body-file', bodyPath];
+      return await new Promise((resolve, reject) => {
+        execFile('gh', args, { cwd: temporary, signal, timeout: 60000, maxBuffer: 256 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+          if (signal?.aborted) { reject(new Error('操作をキャンセルしました。Issueが作成済みの可能性があるためGitHubで確認してください。')); return; }
+          const url = stdout.trim().match(/^https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/\d+$/)?.[0];
+          resolve({ executed: true, success: !error, created: !error && Boolean(url), url,
+            stdout: stdout.slice(0, 2000), stderr: stderr.slice(0, 2000),
+            error: error ? 'Issueの作成に失敗しました。GitHub CLIの認証・リポジトリの権限とstderrを確認してください。再実行前に作成済みでないか確認してください。' : undefined });
+        });
+      });
+    } finally { await rm(temporary, { recursive: true, force: true }); }
+  }
   if (action.tool === 'folder.read') {
     if (!vscode.workspace.isTrusted) throw new Error('フォルダー読み込みには信頼されたワークスペースが必要です。');
     const path = await realpath(action.path);

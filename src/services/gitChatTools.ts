@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { attributeCommit } from './commitAttribution';
 import { selectRepository } from '../commands/sourceControl';
 import { ApprovalService } from './approvalService';
 
@@ -63,7 +64,7 @@ export async function executeGitChatAction(action: GitChatAction, approvals: App
   const commit = action.tool === 'git.commitAndPush';
   const targets = commit && action.args.stageAll ? files : state.indexChanges;
   if (commit && !targets.length) throw new Error('コミット対象がありません。既存コミットを送る場合はgit.pushを使ってください。');
-  const message = commit ? action.args.message.trim() : '';
+  const message = commit ? attributeCommit(action.args.message.trim()) : '';
   const snapshot = JSON.stringify({ head, files: files.map(file => file.uri.fsPath), staged: state.indexChanges.map(file => file.uri.fsPath),
     index: await repository.diff(true), working: await repository.diff(false) });
   check();

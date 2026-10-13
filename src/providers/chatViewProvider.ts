@@ -7,7 +7,6 @@ import { PauseGate } from '../services/pauseGate';
 import { revealAnswer } from '../services/revealAnswer';
 import { ConnectionSetupCancelled, CONNECTION_SETUP_NOTICE } from '../services/connectionSetup';
 import { collectContext } from '../services/contextCollector';
-import { codingContext, isCodingRequest } from '../services/codingContext';
 import { createGeneratedFiles, ExistingFilesNeedEditing, normalizeDestinationPath, parseGeneratedFiles } from '../services/generatedFiles';
 import { chatPrompt } from '../services/promptBuilder';
 import { errorMessage } from '../utils/runRequest';
@@ -17,6 +16,8 @@ import { ChatHistory } from '../services/chatHistory';
 import { chatHtml } from './chatHtml';
 import { ApprovalPrompt } from '../services/approvalPrompt';
 import { ApprovalService } from '../services/approvalService';
+import { readDroppedPdfs } from '../services/droppedPdfs';
+import { readDroppedImages } from '../services/droppedImages';
 import { validateImages } from '../services/imageAttachments';
 import { ModelSelection } from '../services/modelSelection';
 import { extractLinks, LinkReader, LinkSource, MAX_SOURCES } from '../services/linkReader';
@@ -86,7 +87,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.goal = ''; this.planMode = false; this.generationPath = '';
         this.sources = []; this.files = []; this.notice = '';
         this.error = '';
-        this.publish(true);
+        this.publish(true, false, true);
       })
     );
   }
@@ -126,7 +127,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }));
   }
 
-  private publish(clearInput = false, preserveDraft = false): void {
+  private publish(clearInput = false, preserveDraft = false, preserveInput = false): void {
     for (const listener of this.sessionListeners) listener();
     const session = this.auth.session;
     const backgroundGeneration = !!this.generation && this.generation.chatId !== this.history.selectedId;
@@ -150,24 +151,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       generationPath: session ? this.generationPath : '',
       goal: session ? this.goal : '', planMode: this.planMode, notice: this.notice,
       pendingPrompts: session ? this.pendingPrompts.filter(item => item.chatId === this.history.selectedId).map(({ images, ...item }) => ({ ...item, imageNames: images.map(image => image.name) })) : [],
-      error: this.error, clearInput, preserveDraft
+      error: this.error, clearInput, preserveDraft, preserveInput
     });
   }
 
   private async receive(raw: unknown): Promise<void> {
     if (!raw || typeof raw !== 'object') return;
-    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown; editing?: unknown; enabled?: unknown; autoDebug?: unknown };
+    const message = raw as { type?: unknown; text?: unknown; includeContext?: unknown; id?: unknown; images?: unknown; mode?: unknown; allowed?: unknown; index?: unknown; editing?: unknown; enabled?: unknown; autoDebug?: unknown; newChat?: unknown; uris?: unknown; documents?: unknown };
+    if (message.type === 'dropPdfs') {
+      const session = this.auth.session;
+      const view = this.view;
+      if (!view) return;
+      const controller = new AbortController();
+      const chatId = this.history.selectedId;
+      try {
+        if (!session) throw new Error('APIキーを登録してからPDFを添付してください。');
+        if (this.controller) throw new Error('PDFは処理の完了後に添付してください。');
+        this.controller = controller; this.loadingFiles = true; this.error = ''; this.notice = ''; this.publish();
+        const additions = await readDroppedPdfs(message.documents, message.uris, controller.signal);
+        if (this.auth.session?.key !== session.key || this.history.selectedId !== chatId || controller.signal.aborted) throw new Error('PDFの読み込みをキャンセルしました。');
+        const all = [...this.files, ...additions.filter(file => !this.files.some(existing => existing.path === file.path))];
+        if (all.length > MAX_FILES || all.reduce((sum, file) => sum + file.text.length, 0) > MAX_FILE_CHARS) throw new Error('ファイル添付は20件・合計8万文字までです。');
+        this.files = all; this.notice = `${additions.length}件のPDFを添付しました。`;
+        void view.webview.postMessage({ type: 'droppedPdfs', id: message.id });
+      } catch (error) {
+        this.error = errorMessage(error);
+        void view.webview.postMessage({ type: 'droppedPdfs', id: message.id, error: this.error });
+      } finally {
+        if (this.controller === controller) { this.controller = undefined; this.loadingFiles = false; this.publish(); }
+      }
+      return;
+    }
+    if (message.type === 'dropImages') {
+      const session = this.auth.session;
+      const view = this.view;
+      if (!view) return;
+      try {
+        if (!session) throw new Error('APIキーを登録してから画像を添付してください。');
+        const images = await readDroppedImages(message.uris);
+        if (this.auth.session?.key !== session.key) throw new Error('画像の読み込みをキャンセルしました。');
+        void view.webview.postMessage({ type: 'droppedImages', id: message.id, images });
+      } catch (error) {
+        void view.webview.postMessage({ type: 'droppedImages', id: message.id, error: errorMessage(error) });
+      }
+      return;
+    }
     if (message.type === 'ready') { this.publish(); return; }
     if (message.type === 'queuePrompt' || message.type === 'editQueuedPrompt' || message.type === 'removeQueuedPrompt' || message.type === 'runQueuedPrompt') {
       if (!this.auth.session || this.browser?.enabled) return;
       if (message.type === 'queuePrompt') {
-        if (this.generation && this.generation.chatId !== this.history.selectedId) return;
+        if (this.generation && this.generation.chatId !== this.history.selectedId && !(this.showingHistory && message.newChat === true)) return;
         if (typeof message.text !== 'string') return;
         let images: ImageAttachment[];
         try { images = validateImages(message.images); }
         catch (error) { this.error = errorMessage(error); this.publish(); return; }
         if (!message.text.trim() && !images.length) return;
         if (this.pendingPrompts.length >= 10) { this.error = '待機できるプロンプトは10件までです。'; this.publish(); return; }
+        if (this.showingHistory && message.newChat === true) {
+          this.history.startNew(); this.history.ensureActive(message.text.trim() || '添付画像について説明してください。');
+          this.showingHistory = false;
+        }
         this.pendingPrompts.push({ id: String(++this.promptSequence), text: message.text.trim() || '添付画像について説明してください。', editing: false, images, chatId: this.history.selectedId });
       } else {
         const index = this.pendingPrompts.findIndex(item => item.id === message.id);
@@ -409,6 +452,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       // receive側でも検証し、Webviewでの入力制限だけに依存しない。
       const session = await this.auth.requireSession();
       if (this.controller || this.changingModel) return;
+      if (this.showingHistory && message.newChat !== false || message.newChat === true) this.history.startNew();
       const controller = new AbortController();
       this.controller = controller;
       ownsGeneration = true;
@@ -437,12 +481,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
         const planMode = this.planMode;
         const folders = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file') ?? [];
-        if (!planMode && !this.generationPath && !context && !this.files.length && isCodingRequest(text) && folders.length === 1) {
-          this.files = await codingContext(folders[0].uri.fsPath, editor?.document.uri.scheme === 'file' ? editor.document.uri.fsPath : undefined, controller.signal);
-          if (controller.signal.aborted || this.auth.session?.key !== session.key) throw new Error('処理をキャンセルしました。');
-          this.notice = this.files.length ? `編集対象として読み込みました: ${this.files.map(file => file.name).join(', ')}` : '編集対象を特定できませんでした。対象ファイルを開くか「＋」から選択してください。';
-          this.publish();
-        }
         const editSources = this.files.map(file => ({ path: file.path, text: file.text }));
         if (context && editor?.document.uri.scheme === 'file') editSources.push({ path: editor.document.uri.fsPath, text: context.fullText });
         const outputDirectory = this.generationPath || (folders.length === 1 ? folders[0].uri.fsPath : !folders.length && editSources.length ? dirname(editSources[0].path) : undefined);
@@ -486,6 +524,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           if (this.auth.session?.key !== session.key) throw new Error('接続先が変わりました。');
           if (autoDebug && !debugFilesReady) return { executed: false, reason: '既存ファイルの本文を確認しました。変更案を作り直してから再テストしてください。' };
           this.notice = action.tool === 'git.status' || action.tool === 'git.push' || action.tool === 'git.commitAndPush' || action.tool === 'git.setRemote' ? `ソース管理を操作: ${action.tool}`
+            : action.tool === 'github.createIssue' ? `GitHub Issueを作成: ${action.args.repo} · ${action.args.title}`
             : action.tool === 'github.createRepo' ? `GitHubリポジトリを作成: ${action.args.name}`
             : action.tool === 'run_command' ? `コマンドを実行: ${action.command} ${JSON.stringify(action.args)}`
             : action.tool === 'file.read' || action.tool === 'file.write' || action.tool === 'folder.read' ? `ファイル操作: ${action.path}`
@@ -570,7 +609,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (item.editing || !item.text.trim() || item.chatId !== this.history.selectedId) break;
         this.pendingPrompts.shift();
         void this.view?.webview.postMessage({ type: 'queuedPromptStarted', id: item.id, text: item.text });
-        await this.receive({ type: 'send', text: item.text, includeContext: false, images: item.images });
+        await this.receive({ type: 'send', text: item.text, newChat: false, includeContext: false, images: item.images });
       }
     } finally { this.dispatchingPrompt = false; this.publish(); }
   }

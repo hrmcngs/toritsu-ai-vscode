@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { basename } from 'node:path';
 import { LlmClient } from '../services/llmClient';
 import { errorMessage, runRequest } from '../utils/runRequest';
+import { attributeCommit } from '../services/commitAttribution';
 
 interface GitChange { uri: vscode.Uri }
 export interface GitRepository {
@@ -70,7 +71,7 @@ export async function generateCommitMessage(client: LlmClient, sourceControl?: u
   if (await repository.diff(staged) !== diff) throw new Error('生成中に差分が変わりました。もう一度生成してください。');
   const message = answer.trim();
   if (!message) throw new Error('コミットメッセージを生成できませんでした。');
-  repository.inputBox.value = message;
+  repository.inputBox.value = attributeCommit(message);
 }
 
 export async function commitAndPush(sourceControl?: unknown): Promise<void> {
@@ -79,8 +80,9 @@ export async function commitAndPush(sourceControl?: unknown): Promise<void> {
   await repository.status();
   if (repository.state.mergeChanges.length) throw new Error('競合を解消してからコミットしてください。');
   if (!repository.state.indexChanges.length) throw new Error('コミットする変更を「＋」でステージしてください。');
-  const message = repository.inputBox.value.trim();
-  if (!message) throw new Error('コミットメッセージを入力、または都立AIで生成してください。');
+  const enteredMessage = repository.inputBox.value.trim();
+  if (!enteredMessage) throw new Error('コミットメッセージを入力、または都立AIで生成してください。');
+  const message = attributeCommit(enteredMessage);
   const head = repository.state.HEAD && { ...repository.state.HEAD };
   if (!head?.name) throw new Error('ブランチを選択してからpushしてください。');
   const remoteName = head.upstream?.remote ?? (repository.state.remotes.length === 1 ? repository.state.remotes[0].name :
@@ -96,7 +98,7 @@ export async function commitAndPush(sourceControl?: unknown): Promise<void> {
   if (confirmed !== 'コミットしてpush') return;
   await repository.status();
   if (repository.state.HEAD?.name !== head.name || repository.state.HEAD?.commit !== head.commit ||
-    repository.inputBox.value.trim() !== message || await repository.diff(true) !== diff) throw new Error('確認中に変更が入ったため、もう一度確認してください。');
+    repository.inputBox.value.trim() !== enteredMessage || await repository.diff(true) !== diff) throw new Error('確認中に変更が入ったため、もう一度確認してください。');
   await repository.commit(message, { postCommitCommand: null });
   try { await repository.push(remote.name, branch, !head.upstream); }
   catch (error) { throw new Error(`コミットは完了しましたが、pushに失敗しました。ソース管理の「Push」で再試行してください。${errorMessage(error)}`); }
