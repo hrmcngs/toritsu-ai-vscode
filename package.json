@@ -2,7 +2,7 @@
   "name": "toritsu-ai",
   "displayName": "都立AI",
   "description": "都立AIの授業用APIと連携する非公式クライアント。コード説明、選択範囲編集、サイドバーチャットに対応。",
-  "version": "0.12.17",
+  "version": "0.12.18",
   "publisher": "hrmcngs",
   "icon": "media/extension-icon.png",
   "private": true,
@@ -198,15 +198,18 @@
       "title": "Toritsu AI",
       "properties": {
         "toritsuAI.commitAttribution.enabled": {
-          "type": "boolean", "default": true,
+          "type": "boolean",
+          "default": true,
           "description": "都立AIで生成・実行するコミットに、設定した共同作成者を追加します。通常のGitコミットは変更しません。"
         },
         "toritsuAI.commitAttribution.name": {
-          "type": "string", "default": "Toritsu AI",
+          "type": "string",
+          "default": "Toritsu AI",
           "description": "都立AIの共同作成者名。"
         },
         "toritsuAI.commitAttribution.email": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "都立AI用GitHubアカウントに紐づくコミット用メール。noreply推奨。空欄では共同作成者を追加しません。"
         },
         "toritsuAI.baseUrl": {
